@@ -247,4 +247,134 @@ mod tests {
         assert!(get_locale_ranges("no").is_some());
         assert!(get_locale_ranges("da").is_some());
     }
+
+    #[test]
+    fn test_all_locales_include_basic_latin() {
+        let locales = [
+            "en", "fr", "de", "es", "it", "pt", "nl", "sv", "no", "da", "pl", "cs", "sk", "hu",
+            "ro", "tr", "ru", "uk", "be", "el", "ar", "he", "ja", "zh", "ko", "hi", "th", "vi",
+        ];
+        for locale in locales {
+            let ranges = get_locale_ranges(locale)
+                .unwrap_or_else(|| panic!("{} should have ranges", locale));
+            assert!(
+                ranges.contains(&BASIC_LATIN),
+                "{} should include BASIC_LATIN",
+                locale
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_locale_ranges_german() {
+        let ranges = get_locale_ranges("de").unwrap();
+        assert_eq!(ranges.len(), 3);
+        assert!(ranges.contains(&LATIN_1_SUPPLEMENT));
+        assert!(ranges.contains(&LATIN_EXTENDED_A));
+    }
+
+    #[test]
+    fn test_get_locale_ranges_arabic() {
+        let ranges = get_locale_ranges("ar").unwrap();
+        assert!(ranges.contains(&ARABIC));
+        assert!(ranges.contains(&ARABIC_SUPPLEMENT));
+    }
+
+    #[test]
+    fn test_get_locale_ranges_hebrew() {
+        let ranges = get_locale_ranges("he").unwrap();
+        assert!(ranges.contains(&HEBREW));
+    }
+
+    #[test]
+    fn test_get_locale_ranges_korean() {
+        let ranges = get_locale_ranges("ko").unwrap();
+        assert!(ranges.contains(&HANGUL_SYLLABLES));
+        assert!(ranges.contains(&CJK_UNIFIED_IDEOGRAPHS));
+    }
+
+    #[test]
+    fn test_get_locale_ranges_vietnamese() {
+        let ranges = get_locale_ranges("vi").unwrap();
+        assert!(ranges.contains(&VIETNAMESE_EXTENSIONS));
+        assert!(ranges.contains(&LATIN_EXTENDED_ADDITIONAL));
+    }
+
+    #[test]
+    fn test_format_range_single() {
+        let range = 0x41..0x42;
+        assert_eq!(format_range(&range), "65");
+    }
+
+    #[test]
+    fn test_format_range_normal() {
+        let range = 0x20..0x7F;
+        assert_eq!(format_range(&range), "32-126");
+    }
+
+    #[test]
+    fn test_format_range_large() {
+        let range = 0x4E00..0x9FFF;
+        assert_eq!(format_range(&range), "19968-40958");
+    }
+
+    #[test]
+    fn test_format_ranges_empty() {
+        let ranges: Vec<&Range<u32>> = vec![];
+        assert_eq!(format_ranges(ranges), "");
+    }
+
+    #[test]
+    fn test_format_ranges_single() {
+        let range = 0x20..0x7F;
+        assert_eq!(format_ranges(core::iter::once(&range)), "32-126");
+    }
+
+    #[test]
+    fn test_format_ranges_multiple() {
+        let ranges = vec![&BASIC_LATIN, &LATIN_1_SUPPLEMENT];
+        let result = format_ranges(ranges);
+        assert_eq!(result, "32-126,160-254");
+    }
+
+    #[test]
+    fn test_merge_contiguous_ranges_exactly_adjacent() {
+        let ranges = vec![0x20..0x7F, 0x7F..0xFF];
+        let merged = merge_contiguous_ranges(ranges);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0], 0x20..0xFF);
+    }
+
+    #[test]
+    fn test_merge_contiguous_ranges_not_touching() {
+        let ranges = vec![0x20..0x7F, 0x100..0x17F, 0x200..0x2FF];
+        let merged = merge_contiguous_ranges(ranges);
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn test_merge_contiguous_ranges_partial_overlap() {
+        let ranges = vec![0x20..0x80, 0x60..0xA0, 0x90..0xFF];
+        let merged = merge_contiguous_ranges(ranges);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0], 0x20..0xFF);
+    }
+
+    #[test]
+    fn test_get_locale_ranges_case_sensitive() {
+        assert!(get_locale_ranges("EN").is_none());
+        assert!(get_locale_ranges("FR").is_none());
+    }
+
+    #[test]
+    fn test_get_locale_ranges_polish() {
+        let ranges = get_locale_ranges("pl").unwrap();
+        assert!(ranges.contains(&LATIN_EXTENDED_A));
+    }
+
+    #[test]
+    fn test_get_locale_ranges_turkish() {
+        let ranges = get_locale_ranges("tr").unwrap();
+        assert!(ranges.contains(&LATIN_1_SUPPLEMENT));
+    }
 }

@@ -184,4 +184,125 @@ mod tests {
         assert_eq!(days_in_month(2024, 1), 29);
         assert_eq!(days_in_month(2023, 1), 28);
     }
+
+    #[test]
+    fn only_time() {
+        assert_eq!(format_unix_timestamp(3661, "%H:%M:%S"), "01:01:01");
+    }
+
+    #[test]
+    fn only_date() {
+        assert_eq!(format_unix_timestamp(0, "%Y-%m-%d"), "1970-01-01");
+    }
+
+    #[test]
+    fn literal_percent() {
+        assert_eq!(format_unix_timestamp(0, "100%%"), "100%");
+    }
+
+    #[test]
+    fn unknown_format_token() {
+        assert_eq!(format_unix_timestamp(0, "%x"), "%x");
+    }
+
+    #[test]
+    fn partial_percent_at_end() {
+        assert_eq!(format_unix_timestamp(0, "end%"), "end%");
+    }
+
+    #[test]
+    fn mixed_literal_and_format() {
+        assert_eq!(
+            format_unix_timestamp(0, "Date: %Y-%m-%d, Time: %H:%M:%S"),
+            "Date: 1970-01-01, Time: 00:00:00"
+        );
+    }
+
+    #[test]
+    fn noon_is_12_pm() {
+        let noon = 12 * 3600;
+        assert_eq!(decompose_unix_timestamp(noon), (1970, 1, 1, 12, 0, 0));
+    }
+
+    #[test]
+    fn hour_12_midnight() {
+        assert_eq!(hour_12(0), 12);
+    }
+
+    #[test]
+    fn hour_12_noon() {
+        assert_eq!(hour_12(12), 12);
+    }
+
+    #[test]
+    fn hour_12_various() {
+        assert_eq!(hour_12(1), 1);
+        assert_eq!(hour_12(11), 11);
+        assert_eq!(hour_12(13), 1);
+        assert_eq!(hour_12(23), 11);
+    }
+
+    #[test]
+    fn format_12_hour_noon() {
+        let noon = 12 * 3600;
+        assert_eq!(format_unix_timestamp(noon, "%I:%M %p"), "12:00 PM");
+    }
+
+    #[test]
+    fn format_12_hour_midnight() {
+        assert_eq!(format_unix_timestamp(0, "%I:%M %p"), "12:00 AM");
+    }
+
+    #[test]
+    fn year_2000_timestamp() {
+        let ts = 946684800; // 2000-01-01T00:00:00Z
+        assert_eq!(format_unix_timestamp(ts, "%Y"), "2000");
+    }
+
+    #[test]
+    fn leap_year_2000() {
+        let ts = 951782400; // 2000-02-29T00:00:00Z
+        assert_eq!(decompose_unix_timestamp(ts), (2000, 2, 29, 0, 0, 0));
+        assert_eq!(format_unix_timestamp(ts, "%Y-%m-%d"), "2000-02-29");
+    }
+
+    #[test]
+    fn non_leap_year_1900() {
+        assert!(!is_leap_year(1900));
+    }
+
+    #[test]
+    fn century_boundary_2000_is_leap() {
+        assert!(is_leap_year(2000));
+    }
+
+    #[test]
+    fn year_2038_problem() {
+        let ts = 2147483648i64; // just after 2038-01-19T03:14:07Z
+        assert_eq!(format_unix_timestamp(ts, "%Y"), "2038");
+    }
+
+    #[test]
+    fn empty_pattern() {
+        assert_eq!(format_unix_timestamp(0, ""), "");
+    }
+
+    #[test]
+    fn no_format_tokens() {
+        assert_eq!(
+            format_unix_timestamp(0, "just literal text"),
+            "just literal text"
+        );
+    }
+
+    #[test]
+    fn negative_timestamp_bce_date() {
+        let ts = -31536000i64; // 1969-01-01
+        assert_eq!(format_unix_timestamp(ts, "%Y-%m-%d"), "1969-01-01");
+    }
+
+    #[test]
+    fn multiple_percent_escape() {
+        assert_eq!(format_unix_timestamp(0, "%%Y%%m%%d%%"), "%Y%m%d%");
+    }
 }
