@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/embedded-i18n)](https://docs.rs/embedded-i18n)
 [![codecov](https://codecov.io/github/AlixANNERAUD/embedded-i18n/graph/badge.svg?token=0C27GIS0BK)](https://codecov.io/github/AlixANNERAUD/embedded-i18n)
 
-Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON locale files and embeds them directly into ROM,  no runtime loading, no allocator required for translations.
+Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON locale files and embeds them directly into ROM, no runtime loading, no allocator required for translations.
 
 ## Installation
 
@@ -17,7 +17,7 @@ embedded-i18n = "0.1"
 
 1. Place `locales/<locale>.json` files next to your `Cargo.toml`.
 2. Set `EMBEDDED_I18N_LOCALE` (and optionally `EMBEDDED_I18N_FALLBACK`) at build time.
-3. Use the `translate!()` macro,  it resolves to a `&'static str` at compile time.
+3. Use the `translate!()` macro, it resolves to a `&'static str` at compile time.
 
 ```rust
 use embedded_i18n::translate;
@@ -113,7 +113,7 @@ let s = format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S");
 
 | Feature     | Description                                                                          |
 | ----------- | ------------------------------------------------------------------------------------ |
-| _(default)_ | `no_std`,  `translate!()` macro, unicode ranges, timestamp formatting                |
+| _(default)_ | `no_std`, `translate!()` macro, unicode ranges, timestamp formatting                 |
 | `std`       | Enables runtime locale getters (`get_locale_build()`, `get_fallback_locale_build()`) |
 
 ## `no_std` Support
@@ -122,7 +122,7 @@ This crate is `#![no_std]`-compatible by default. The `translate!()` macro, unic
 
 ## License
 
-Licensed under the <a href="LICENSE">GPL-2.0-only</a>.
+Licensed under the <a href="LICENSE">MIT License</a>.
 
 ---
 

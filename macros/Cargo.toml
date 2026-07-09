@@ -3,7 +3,7 @@ name = "embedded-i18n-macros"
 version = "0.1.0"
 edition = "2024"
 authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
-license = "GPL-2.0-only"
+license = "MIT"
 description = "Proc macros for embedded-i18n — compile-time translation embedding"
 
 [dependencies]
