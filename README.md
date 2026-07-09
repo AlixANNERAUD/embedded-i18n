@@ -15,7 +15,7 @@ embedded-i18n = "0.1"
 
 ## Quick Start
 
-1. Place `locales/<locale>.json` files next to your `Cargo.toml`.
+1. Place `locales/<locale>.json` or `locales/<locale>.po` files next to your `Cargo.toml`.
 2. Set `EMBEDDED_I18N_LOCALE` (and optionally `EMBEDDED_I18N_FALLBACK`) at build time.
 3. Use the `translate!()` macro, it resolves to a `&'static str` at compile time.
 
@@ -25,13 +25,23 @@ use embedded_i18n::translate;
 let greeting = translate!("Hello, world!");
 ```
 
-### Locale files
+### Locale files — JSON
 
 ```json
 {
   "Hello, world!": "Bonjour le monde !",
   "Missing argument: {}": "Argument manquant : {}"
 }
+```
+
+### Locale files — GNU gettext PO
+
+```po
+msgid "Hello, world!"
+msgstr "Bonjour le monde !"
+
+msgid "Missing argument: {}"
+msgstr "Argument manquant : {}"
 ```
 
 ### Build configuration
@@ -58,7 +68,7 @@ Panics at compile time if the key is not found in either the selected locale or 
 
 ### Locale resolution
 
-Translations are loaded from `locales/<locale>.json` at compile time. The locale and fallback are selected via environment variables:
+Translations are loaded from files in the `locales/` directory at compile time. The enabled backends determine which file formats are tried (`.json` is tried first, then `.po`). The locale and fallback are selected via environment variables:
 
 | Env variable             | Default | Description                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------- |
@@ -111,10 +121,22 @@ let s = format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S");
 
 ## Features
 
-| Feature     | Description                                                                          |
-| ----------- | ------------------------------------------------------------------------------------ |
-| _(default)_ | `no_std`, `translate!()` macro, unicode ranges, timestamp formatting                 |
-| `std`       | Enables runtime locale getters (`get_locale_build()`, `get_fallback_locale_build()`) |
+| Feature        | Description                                                                          |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `backend-json` | **Default.** JSON locale files via `serde_json`.                                     |
+| `backend-po`   | GNU gettext PO locale files (`.po`).                                                 |
+| `std`          | Enables runtime locale getters (`get_locale_build()`, `get_fallback_locale_build()`) |
+
+### Backend selection
+
+By default the JSON backend is enabled. To use PO files instead, disable default features:
+
+```toml
+[dependencies]
+embedded-i18n = { version = "0.1", default-features = false, features = ["backend-po"] }
+```
+
+Both backends can be enabled simultaneously — the first matching file wins (JSON first, then PO).
 
 ## `no_std` Support
 
