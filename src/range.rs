@@ -180,7 +180,10 @@ mod tests {
 
     #[test]
     fn test_merge_contiguous_ranges_single() {
-        let ranges = vec![0x20..0x7F];
+        let ranges = vec![Range {
+            start: 0x20,
+            end: 0x7F,
+        }];
         let merged = merge_contiguous_ranges(ranges);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0], 0x20..0x7F);
