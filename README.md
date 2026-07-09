@@ -25,7 +25,7 @@ use embedded_i18n::translate;
 let greeting = translate!("Hello, world!");
 ```
 
-### Locale files — JSON
+### Locale files - JSON
 
 ```json
 {
@@ -34,7 +34,7 @@ let greeting = translate!("Hello, world!");
 }
 ```
 
-### Locale files — GNU gettext PO
+### Locale files - GNU gettext PO
 
 ```po
 msgid "Hello, world!"
@@ -136,7 +136,7 @@ By default the JSON backend is enabled. To use PO files instead, disable default
 embedded-i18n = { version = "0.1", default-features = false, features = ["backend-po"] }
 ```
 
-Both backends can be enabled simultaneously — the first matching file wins (JSON first, then PO).
+Both backends can be enabled simultaneously, the first matching file wins (JSON first, then PO).
 
 ## `no_std` Support
 
