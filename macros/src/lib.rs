@@ -1,8 +1,13 @@
-use std::{collections::HashMap, fs};
+use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
 use proc_macro::TokenStream;
 use quote::quote;
+
+#[cfg(feature = "backend-json")]
+mod json;
+#[cfg(feature = "backend-po")]
+mod po;
 
 static TRANSLATION_PATH: Lazy<std::path::PathBuf> = Lazy::new(|| {
     let path = std::env::var("CARGO_MANIFEST_DIR")
@@ -22,58 +27,50 @@ static FALLBACK_LOCALE: Lazy<String> =
 static TRANSLATION_MAP: Lazy<HashMap<String, String>> = Lazy::new(|| {
     let mut generated_items = HashMap::new();
 
-    let locale_file_path = TRANSLATION_PATH
-        .clone()
-        .join(format!("{}.json", LOCALE.to_lowercase()));
-    if locale_file_path.exists() {
-        match fs::read_to_string(&locale_file_path) {
-            Ok(content) => match serde_json::from_str::<HashMap<String, String>>(&content) {
-                Ok(translations) => {
-                    for (key, value) in translations {
-                        if !value.is_empty() {
-                            generated_items.insert(key, value);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error parsing JSON file {:?}: {}", locale_file_path, e);
-                }
-            },
-            Err(e) => {
-                eprintln!("Failed to read locale file {:?}: {}", locale_file_path, e);
+    if let Some(translations) = load_locale(&LOCALE) {
+        for (key, value) in translations {
+            if !value.is_empty() {
+                generated_items.insert(key, value);
             }
         }
     }
 
-    let fallback_file_path = TRANSLATION_PATH
-        .clone()
-        .join(format!("{}.json", FALLBACK_LOCALE.to_lowercase()));
-    if fallback_file_path.exists() {
-        match fs::read_to_string(&fallback_file_path) {
-            Ok(content) => match serde_json::from_str::<HashMap<String, String>>(&content) {
-                Ok(translations) => {
-                    for (key, value) in translations {
-                        generated_items.entry(key).or_insert(value);
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Error parsing fallback JSON file {:?}: {}",
-                        fallback_file_path, e
-                    );
-                }
-            },
-            Err(e) => {
-                eprintln!(
-                    "Failed to read fallback locale file {:?}: {}",
-                    fallback_file_path, e
-                );
-            }
+    if let Some(translations) = load_locale(&FALLBACK_LOCALE) {
+        for (key, value) in translations {
+            generated_items.entry(key).or_insert(value);
         }
     }
 
     generated_items
 });
+
+fn load_locale(locale: &str) -> Option<HashMap<String, String>> {
+    let locale = &locale.to_lowercase();
+
+    #[cfg(feature = "backend-json")]
+    {
+        let path = TRANSLATION_PATH.join(format!("{}.{}", locale, json::EXTENSION));
+        if path.exists() {
+            match json::load(&path) {
+                Ok(map) => return Some(map),
+                Err(e) => eprintln!("embedded-i18n: JSON error for {:?}: {}", path, e),
+            }
+        }
+    }
+
+    #[cfg(feature = "backend-po")]
+    {
+        let path = TRANSLATION_PATH.join(format!("{}.{}", locale, po::EXTENSION));
+        if path.exists() {
+            match po::load(&path) {
+                Ok(map) => return Some(map),
+                Err(e) => eprintln!("embedded-i18n: PO error for {:?}: {}", path, e),
+            }
+        }
+    }
+
+    None
+}
 
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {

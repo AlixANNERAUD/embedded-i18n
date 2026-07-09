@@ -1,0 +1,20 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "greeting"
+msgstr "Hello"
+
+msgid "farewell"
+msgstr "Goodbye"
+
+msgid "with_arg"
+msgstr "Value: {}"
+
+msgid "c_greeting"
+msgstr "Hello from C"
+
+msgid "missing_in_french"
+msgstr "Only in English"

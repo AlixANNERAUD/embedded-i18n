@@ -10,14 +10,16 @@ categories = ["internationalization", "embedded", "no-std"]
 authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
 
 [dependencies]
-embedded-i18n-macros = { path = "macros" }
+embedded-i18n-macros = { path = "macros", default-features = false }
 
 [features]
-default = []
+default = ["backend-json"]
 std = []
+backend-json = ["embedded-i18n-macros/backend-json"]
+backend-po = ["embedded-i18n-macros/backend-po"]
 
 [package.metadata.docs.rs]
-features = ["std"]
+features = ["std", "backend-json", "backend-po"]
 
 [workspace]
 members = ["macros"]
