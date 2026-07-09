@@ -2,5 +2,19 @@
 name = "embedded-i18n"
 version = "0.1.0"
 edition = "2024"
+authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
+license = "GPL-2.0-only"
+description = "Compile-time internationalization (i18n) for embedded and no_std systems — translate strings at build time from JSON locale files and embed them directly into ROM."
 
 [dependencies]
+embedded-i18n-macros = { path = "macros" }
+
+[features]
+default = []
+std = []
+
+[package.metadata.docs.rs]
+features = ["std"]
+
+[workspace]
+members = ["macros"]

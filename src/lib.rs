@@ -1,14 +1,51 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+#![no_std]
+
+extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
+
+mod range;
+mod time;
+
+pub use range::*;
+pub use time::*;
+
+pub use embedded_i18n_macros::translate;
+
+const DEFAULT_LOCALE: &str = "en";
+const DEFAULT_FALLBACK_LOCALE: &str = "en";
+
+pub const fn get_locale() -> &'static str {
+    match option_env!("EMBEDDED_I18N_LOCALE") {
+        Some(locale) => locale,
+        None => DEFAULT_LOCALE,
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub const fn get_fallback_locale() -> &'static str {
+    match option_env!("EMBEDDED_I18N_FALLBACK") {
+        Some(locale) => locale,
+        None => DEFAULT_FALLBACK_LOCALE,
+    }
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+#[cfg(feature = "std")]
+pub fn get_locale_build() -> std::string::String {
+    use std::string::ToString;
+
+    match std::env::var("EMBEDDED_I18N_LOCALE") {
+        Ok(locale) => locale,
+        Err(_) => DEFAULT_LOCALE.to_string(),
+    }
+}
+
+#[cfg(feature = "std")]
+pub fn get_fallback_locale_build() -> std::string::String {
+    use std::string::ToString;
+
+    match std::env::var("EMBEDDED_I18N_FALLBACK") {
+        Ok(locale) => locale,
+        Err(_) => DEFAULT_FALLBACK_LOCALE.to_string(),
     }
 }
