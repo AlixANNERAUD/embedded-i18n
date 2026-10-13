@@ -136,6 +136,34 @@ impl Catalog {
         })
     }
 
+    fn select(&self, keys: &[String]) -> Option<Vec<(&str, &str)>> {
+        self.locales.iter().find_map(|locale| {
+            keys.iter().find_map(|key| {
+                let prefix = format!("{}.", key);
+                let has_other = locale
+                    .translations
+                    .messages
+                    .get(&format!("{}other", prefix))
+                    .is_some_and(|value| !value.is_empty());
+                if !has_other {
+                    return None;
+                }
+                let mut variants: Vec<(&str, &str)> = locale
+                    .translations
+                    .messages
+                    .iter()
+                    .filter_map(|(candidate, value)| {
+                        let variant = candidate.strip_prefix(&prefix)?;
+                        (!variant.is_empty() && !variant.contains('.') && !value.is_empty())
+                            .then_some((variant, value.as_str()))
+                    })
+                    .collect();
+                variants.sort();
+                Some(variants)
+            })
+        })
+    }
+
     fn find(&self, keys: &[String], accept: impl Fn(&str) -> bool) -> Option<&str> {
         self.locales.iter().find_map(|locale| {
             keys.iter().find_map(|key| {
@@ -476,6 +504,120 @@ fn plural_selection(
     }
 }
 
+fn select_selection(
+    message: &Message,
+    value: &syn::Expr,
+    catalog: &Result<Catalog, String>,
+    arm: impl Fn(TokenStream2) -> TokenStream2,
+) -> syn::Result<TokenStream2> {
+    let key = &message.key;
+    let span = key.span();
+    let catalog = catalog
+        .as_ref()
+        .map_err(|error| syn::Error::new(span, error))?;
+    let name = key.value()?;
+
+    let variants = catalog.select(&message.keys(&name)).ok_or_else(|| {
+        syn::Error::new(
+            span,
+            format!(
+                "select translation for {} with an `other` variant not found in locales {} ({})",
+                message.describe(&name),
+                locales_list(catalog),
+                catalog.path.display()
+            ),
+        )
+    })?;
+
+    let mut other = None;
+    let mut patterns = Vec::new();
+    let mut values = Vec::new();
+    for (variant, text) in variants {
+        let value = arm(literal(key, text, &name)?);
+        if variant == "other" {
+            other = Some(value);
+        } else {
+            patterns.push(variant);
+            values.push(value);
+        }
+    }
+
+    if patterns.is_empty() {
+        return Ok(quote! {
+            {
+                let _ = &#value;
+                #other
+            }
+        });
+    }
+
+    Ok(quote! {
+        match ::core::convert::AsRef::<str>::as_ref(&#value) {
+            #(#patterns => #values,)*
+            _ => #other,
+        }
+    })
+}
+
+struct SelectInput {
+    message: Message,
+    value: syn::Expr,
+}
+
+impl Parse for SelectInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let PluralInput { message, count } = input.parse()?;
+        Ok(SelectInput {
+            message,
+            value: count,
+        })
+    }
+}
+
+struct SelectWriteInput {
+    writer: syn::Expr,
+    message: Message,
+    value: syn::Expr,
+    arguments: TokenStream2,
+}
+
+impl Parse for SelectWriteInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let PluralWriteInput {
+            writer,
+            message,
+            count,
+            arguments,
+        } = input.parse()?;
+        Ok(SelectWriteInput {
+            writer,
+            message,
+            value: count,
+            arguments,
+        })
+    }
+}
+
+fn expand_select(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    let input: SelectInput = syn::parse2(input)?;
+    select_selection(&input.message, &input.value, catalog, |literal| literal)
+}
+
+fn expand_select_write(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    let input: SelectWriteInput = syn::parse2(input)?;
+    let writer = &input.writer;
+    let arguments = &input.arguments;
+    select_selection(&input.message, &input.value, catalog, |literal| {
+        quote! { ::core::write!(#writer, #literal, #arguments) }
+    })
+}
+
 struct PluralInput {
     message: Message,
     count: syn::Expr,
@@ -672,6 +814,20 @@ pub fn translate_plural(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn translate_plural_write(input: TokenStream) -> TokenStream {
     expand_plural_write(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro]
+pub fn translate_select(input: TokenStream) -> TokenStream {
+    expand_select(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro]
+pub fn translate_select_write(input: TokenStream) -> TokenStream {
+    expand_select_write(input.into(), &CATALOG)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -1348,5 +1504,108 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(tokens.contains("== 0 { \"none\" }"));
+    }
+
+    #[test]
+    fn select_matches_variants_and_defaults_to_other() {
+        let catalog = locale_catalog(
+            "en",
+            messages(&[
+                ("greeting.male", "He"),
+                ("greeting.female", "She"),
+                ("greeting.other", "They"),
+                ("greeting.male.formal", "Sir"),
+                ("greeting.empty", ""),
+                ("greetings.other", "Unrelated"),
+            ]),
+        );
+        let tokens = expand_select(quote! { "greeting", gender }, &catalog).unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                match ::core::convert::AsRef::<str>::as_ref(&gender) {
+                    "female" => "She",
+                    "male" => "He",
+                    _ => "They",
+                }
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn select_requires_other_variant() {
+        let catalog = locale_catalog("en", messages(&[("greeting.male", "He")]));
+        assert_eq!(
+            expand_select(quote! { "greeting", gender }, &catalog)
+                .err()
+                .unwrap()
+                .to_string(),
+            "select translation for \"greeting\" with an `other` variant not found in locales \"en\" (locales)"
+        );
+    }
+
+    #[test]
+    fn select_variants_come_from_one_locale() {
+        let catalog = Ok(Catalog {
+            path: PathBuf::from("locales"),
+            chain: vec!["fr".to_string(), "en".to_string()],
+            files: Vec::new(),
+            locales: vec![
+                Locale {
+                    name: "fr".to_string(),
+                    translations: messages(&[("greeting.other", "Iel")]),
+                },
+                Locale {
+                    name: "en".to_string(),
+                    translations: messages(&[("greeting.male", "He"), ("greeting.other", "They")]),
+                },
+            ],
+        });
+        let tokens = expand_select(quote! { "greeting", gender }, &catalog).unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                {
+                    let _ = &gender;
+                    "Iel"
+                }
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn select_with_context_and_write() {
+        let catalog = locale_catalog(
+            "en",
+            messages(&[
+                ("mail\u{4}greeting.male", "Dear {name}"),
+                ("mail.greeting.other", "Hi {name}"),
+            ]),
+        );
+        assert!(expand_select(quote! { context = "mail", "greeting", gender }, &catalog).is_ok());
+        let tokens = expand_select_write(
+            quote! { output, context = "mail", "greeting", gender, name = "Ada" },
+            &catalog,
+        )
+        .unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                {
+                    let _ = &gender;
+                    ::core::write!(output, "Hi {name}", name = "Ada")
+                }
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn select_write_rejects_c_string() {
+        assert!(
+            expand_select_write(quote! { output, c"greeting", gender }, &catalog(&[])).is_err()
+        );
     }
 }

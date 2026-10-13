@@ -38,3 +38,12 @@ msgid "files"
 msgid_plural "files"
 msgstr[0] "Fichier ouvert"
 msgstr[1] "Fichiers ouverts"
+
+msgid "replied.male"
+msgstr "Il a répondu"
+
+msgid "replied.female"
+msgstr "Elle a répondu"
+
+msgid "replied.other"
+msgstr "Iel a répondu"

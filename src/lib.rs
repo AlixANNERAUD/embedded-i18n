@@ -14,7 +14,7 @@ pub use time::*;
 
 pub use embedded_i18n_macros::{
     track_locales, translate, translate_args, translate_plural, translate_plural_write,
-    translate_write,
+    translate_select, translate_select_write, translate_write,
 };
 
 const DEFAULT_LOCALE: &str = "en";
