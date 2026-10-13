@@ -27,6 +27,7 @@ mod plural;
 mod po;
 #[cfg(feature = "backend-toml")]
 mod toml;
+mod transform;
 #[cfg(any(
     feature = "backend-json",
     feature = "backend-yaml",
@@ -43,6 +44,19 @@ pub(crate) struct Translations {
     pub messages: HashMap<String, String>,
     pub plurals: HashMap<String, Vec<String>>,
     pub plural_rule: Option<plural::Expression>,
+}
+
+impl Translations {
+    fn map_values(&mut self, transform: impl Fn(&str) -> String) {
+        for value in self.messages.values_mut() {
+            *value = transform(value);
+        }
+        for forms in self.plurals.values_mut() {
+            for form in forms {
+                *form = transform(form);
+            }
+        }
+    }
 }
 
 impl From<HashMap<String, String>> for Translations {
@@ -220,9 +234,24 @@ static CATALOG: LazyLock<Result<Catalog, String>> = LazyLock::new(|| {
         Path::new(&manifest_directory),
         std::env::var("EMBEDDED_I18N_PATH").ok().as_deref(),
     );
-    let strict = is_enabled(std::env::var("EMBEDDED_I18N_STRICT").ok().as_deref());
-    load_catalog(&path, &locale, &fallback, strict)
+    let options = Options {
+        strict: is_enabled(std::env::var("EMBEDDED_I18N_STRICT").ok().as_deref()),
+        isolate: is_enabled(
+            std::env::var("EMBEDDED_I18N_BIDI_ISOLATION")
+                .ok()
+                .as_deref(),
+        ),
+    };
+    load_catalog(&path, &locale, &fallback, options)
 });
+
+#[derive(Clone, Copy, Default)]
+struct Options {
+    strict: bool,
+    isolate: bool,
+}
+
+const PSEUDO_LOCALE: &str = "pseudo";
 
 fn is_enabled(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
@@ -244,20 +273,27 @@ fn load_catalog(
     path: &Path,
     locale: &str,
     fallback: &str,
-    strict: bool,
+    options: Options,
 ) -> Result<Catalog, String> {
     if !path.is_dir() {
         return Err(format!("locales directory not found: {}", path.display()));
     }
 
     let chain = locale::chain(locale, fallback);
+    let pseudo = chain.first().is_some_and(|first| first == PSEUDO_LOCALE);
     let mut files = Vec::new();
     let mut locales = Vec::new();
 
     for locale in &chain {
-        if let Some((file, translations)) = load_locale(path, locale)? {
+        if let Some((file, mut translations)) = load_locale(path, locale)? {
             if !files.contains(&file) {
                 files.push(file);
+                if options.isolate && transform::is_right_to_left(locale) {
+                    translations.map_values(transform::isolate_placeholders);
+                }
+                if pseudo {
+                    translations.map_values(transform::pseudo);
+                }
                 locales.push(Locale {
                     name: locale.clone(),
                     translations,
@@ -268,9 +304,13 @@ fn load_catalog(
 
     Ok(Catalog {
         path: path.to_path_buf(),
-        primary: locale::chain(locale, ""),
+        primary: if pseudo {
+            chain.clone()
+        } else {
+            locale::chain(locale, "")
+        },
         chain,
-        strict,
+        strict: options.strict,
         files,
         locales,
     })
@@ -1009,9 +1049,14 @@ mod tests {
     #[test]
     fn reports_missing_locales_directory() {
         let directory = tempfile::tempdir().unwrap();
-        let error = load_catalog(&directory.path().join("missing"), "en", "en", false)
-            .err()
-            .unwrap();
+        let error = load_catalog(
+            &directory.path().join("missing"),
+            "en",
+            "en",
+            Options::default(),
+        )
+        .err()
+        .unwrap();
         assert!(error.starts_with("locales directory not found"));
     }
 
@@ -1020,7 +1065,7 @@ mod tests {
     fn reports_invalid_locale_file() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("en.json"), "{").unwrap();
-        let error = load_catalog(directory.path(), "en", "en", false)
+        let error = load_catalog(directory.path(), "en", "en", Options::default())
             .err()
             .unwrap();
         assert!(error.contains("en.json"));
@@ -1040,7 +1085,7 @@ mod tests {
             r#"{"greeting": "Hello", "empty": "Empty", "only": "Only"}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "fr", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "greeting"), "Bonjour");
         assert_eq!(get(&catalog, "empty"), "Empty");
         assert_eq!(get(&catalog, "only"), "Only");
@@ -1075,7 +1120,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("fr.json"), "{}").unwrap();
         std::fs::write(directory.path().join("en.json"), "{}").unwrap();
-        let catalog = load_catalog(directory.path(), "fr", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en", Options::default()).unwrap();
         assert_eq!(
             catalog.files,
             vec![
@@ -1083,7 +1128,7 @@ mod tests {
                 directory.path().join("en.json")
             ]
         );
-        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", Options::default()).unwrap();
         assert_eq!(catalog.files, vec![directory.path().join("en.json")]);
     }
 
@@ -1209,7 +1254,7 @@ mod tests {
             r#"{"color": "Color", "door": "Door", "bus": "Bus", "train": "Train", "empty": ""}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "fr-ca", "de,en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "fr-ca", "de,en", Options::default()).unwrap();
         assert_eq!(catalog.chain, ["fr-CA", "fr", "de", "en"]);
         assert_eq!(get(&catalog, "color"), "Couleur (CA)");
         assert_eq!(get(&catalog, "door"), "Porte");
@@ -1224,7 +1269,7 @@ mod tests {
     fn locale_file_names_are_matched_case_insensitively() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("zh-cn.json"), r#"{"hello": "你好"}"#).unwrap();
-        let catalog = load_catalog(directory.path(), "zh_CN", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "zh_CN", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "hello"), "你好");
     }
 
@@ -1237,7 +1282,7 @@ mod tests {
             r#"{"menu": {"settings": {"title": "Settings"}}}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "menu.settings.title"), "Settings");
     }
 
@@ -1247,7 +1292,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("fr.yml"), "menu:\n  open: Ouvrir\n").unwrap();
         std::fs::write(directory.path().join("en.yaml"), "menu:\n  open: Open\n").unwrap();
-        let catalog = load_catalog(directory.path(), "fr", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "menu.open"), "Ouvrir");
         assert_eq!(catalog.files.len(), 2);
     }
@@ -1261,7 +1306,7 @@ mod tests {
             "[menu]\nopen = \"Open\"\n",
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "menu.open"), "Open");
     }
 
@@ -1274,7 +1319,7 @@ mod tests {
             "hello = Hello, { $name }!\n",
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "hello"), "Hello, {name}!");
     }
 
@@ -1283,7 +1328,7 @@ mod tests {
     fn reports_invalid_mo_file() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("en.mo"), [0u8; 28]).unwrap();
-        let error = load_catalog(directory.path(), "en", "en", false)
+        let error = load_catalog(directory.path(), "en", "en", Options::default())
             .err()
             .unwrap();
         assert!(error.contains("en.mo"));
@@ -1299,7 +1344,7 @@ mod tests {
             "msgid \"a\"\nmsgstr \"po\"\n",
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", Options::default()).unwrap();
         assert_eq!(get(&catalog, "a"), "json");
     }
 
@@ -1680,7 +1725,16 @@ mod tests {
             r#"{"door": "Door", "train": "Train", "boats": {"one": "boat", "other": "boats"}, "answered": {"other": "They"}}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "fr-CA", "en", true).unwrap();
+        let catalog = load_catalog(
+            directory.path(),
+            "fr-CA",
+            "en",
+            Options {
+                strict: true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
         assert_eq!(catalog.primary, ["fr-CA", "fr"]);
         Ok(catalog)
     }
@@ -1724,5 +1778,70 @@ mod tests {
         assert!(error(quote! { "unknown" }, &strict_catalog()).starts_with(
             "translation for \"unknown\" not found in locales \"fr-CA\", \"fr\", \"en\""
         ));
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn pseudo_locale_transforms_fallbacks() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("en.json"),
+            r#"{"open": "Open {name}", "files": {"one": "{count} file", "other": "{count} files"}}"#,
+        )
+        .unwrap();
+        let catalog = load_catalog(
+            directory.path(),
+            "pseudo",
+            "en",
+            Options {
+                strict: true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(catalog.chain, ["pseudo", "en"]);
+        assert_eq!(get(&catalog, "open"), "[Ópéñ {name} ~~]");
+        assert_eq!(get(&catalog, "files.one"), "[{count} fílé ~~]");
+        let catalog = Ok(catalog);
+        assert!(expand(quote! { "open" }, &catalog).is_ok());
+        assert!(expand_plural(quote! { "files", 2 }, &catalog).is_ok());
+    }
+
+    #[cfg(feature = "backend-po")]
+    #[test]
+    fn bidi_isolation_wraps_placeholders_of_right_to_left_locales() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("ar.po"),
+            "msgid \"hello\"\nmsgstr \"مرحبا {name}\"\n\nmsgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"{count} ملف\"\nmsgstr[1] \"{count} ملفات\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("en.po"),
+            "msgid \"bye\"\nmsgstr \"Bye {name}\"\n",
+        )
+        .unwrap();
+        let options = Options {
+            isolate: true,
+            ..Options::default()
+        };
+        let catalog = load_catalog(directory.path(), "ar", "en", options).unwrap();
+        assert_eq!(
+            catalog.lookup(&["hello".to_string()], false).unwrap(),
+            "مرحبا \u{2068}{name}\u{2069}"
+        );
+        assert_eq!(
+            catalog.locales[0].translations.plurals["file"][1],
+            "\u{2068}{count}\u{2069} ملفات"
+        );
+        assert_eq!(
+            catalog.lookup(&["bye".to_string()], false).unwrap(),
+            "Bye {name}"
+        );
+        let catalog = load_catalog(directory.path(), "ar", "en", Options::default()).unwrap();
+        assert_eq!(
+            catalog.lookup(&["hello".to_string()], false).unwrap(),
+            "مرحبا {name}"
+        );
     }
 }
