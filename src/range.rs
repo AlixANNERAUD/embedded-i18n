@@ -7,41 +7,41 @@ use alloc::{string::String, vec::Vec};
 /// Basic Latin (printable ASCII) code points, as a half-open range.
 pub const BASIC_LATIN: Range<u32> = 0x20..0x7F;
 /// Latin-1 Supplement code points, as a half-open range.
-pub const LATIN_1_SUPPLEMENT: Range<u32> = 0xA0..0xFF;
+pub const LATIN_1_SUPPLEMENT: Range<u32> = 0xA0..0x100;
 /// Latin Extended-A code points, as a half-open range.
-pub const LATIN_EXTENDED_A: Range<u32> = 0x100..0x17F;
+pub const LATIN_EXTENDED_A: Range<u32> = 0x100..0x180;
 /// Latin Extended-B code points, as a half-open range.
-pub const LATIN_EXTENDED_B: Range<u32> = 0x180..0x24F;
+pub const LATIN_EXTENDED_B: Range<u32> = 0x180..0x250;
 /// Latin Extended Additional code points, as a half-open range.
-pub const LATIN_EXTENDED_ADDITIONAL: Range<u32> = 0x1E00..0x1EFF;
+pub const LATIN_EXTENDED_ADDITIONAL: Range<u32> = 0x1E00..0x1F00;
 /// Cyrillic code points, as a half-open range.
-pub const CYRILLIC: Range<u32> = 0x400..0x4FF;
+pub const CYRILLIC: Range<u32> = 0x400..0x500;
 /// Cyrillic Supplement code points, as a half-open range.
-pub const CYRILLIC_SUPPLEMENT: Range<u32> = 0x500..0x52F;
+pub const CYRILLIC_SUPPLEMENT: Range<u32> = 0x500..0x530;
 /// Greek and Coptic code points, as a half-open range.
-pub const GREEK: Range<u32> = 0x370..0x3FF;
+pub const GREEK: Range<u32> = 0x370..0x400;
 /// Greek Extended code points, as a half-open range.
-pub const GREEK_EXTENDED: Range<u32> = 0x1F00..0x1FFF;
+pub const GREEK_EXTENDED: Range<u32> = 0x1F00..0x2000;
 /// Arabic code points, as a half-open range.
-pub const ARABIC: Range<u32> = 0x600..0x6FF;
+pub const ARABIC: Range<u32> = 0x600..0x700;
 /// Arabic Supplement code points, as a half-open range.
-pub const ARABIC_SUPPLEMENT: Range<u32> = 0x750..0x77F;
+pub const ARABIC_SUPPLEMENT: Range<u32> = 0x750..0x780;
 /// Hebrew code points, as a half-open range.
-pub const HEBREW: Range<u32> = 0x590..0x5FF;
+pub const HEBREW: Range<u32> = 0x590..0x600;
 /// CJK Unified Ideographs code points, as a half-open range.
-pub const CJK_UNIFIED_IDEOGRAPHS: Range<u32> = 0x4E00..0x9FFF;
+pub const CJK_UNIFIED_IDEOGRAPHS: Range<u32> = 0x4E00..0xA000;
 /// Hiragana code points, as a half-open range.
-pub const HIRAGANA: Range<u32> = 0x3040..0x309F;
+pub const HIRAGANA: Range<u32> = 0x3040..0x30A0;
 /// Katakana code points, as a half-open range.
-pub const KATAKANA: Range<u32> = 0x30A0..0x30FF;
+pub const KATAKANA: Range<u32> = 0x30A0..0x3100;
 /// Hangul Syllables code points, as a half-open range.
-pub const HANGUL_SYLLABLES: Range<u32> = 0xAC00..0xD7AF;
+pub const HANGUL_SYLLABLES: Range<u32> = 0xAC00..0xD7B0;
 /// Devanagari code points, as a half-open range.
-pub const DEVANAGARI: Range<u32> = 0x900..0x97F;
+pub const DEVANAGARI: Range<u32> = 0x900..0x980;
 /// Thai code points, as a half-open range.
-pub const THAI: Range<u32> = 0xE00..0xE7F;
+pub const THAI: Range<u32> = 0xE00..0xE80;
 /// Vietnamese letters of Latin Extended Additional code points, as a half-open range.
-pub const VIETNAMESE_EXTENSIONS: Range<u32> = 0x1EA0..0x1EFF;
+pub const VIETNAMESE_EXTENSIONS: Range<u32> = 0x1EA0..0x1F00;
 
 /// Returns the Unicode ranges needed to render a language, to subset fonts.
 ///
@@ -324,7 +324,59 @@ mod tests {
         assert_eq!(BASIC_LATIN.start, 0x20);
         assert_eq!(BASIC_LATIN.end, 0x7F);
         assert_eq!(CJK_UNIFIED_IDEOGRAPHS.start, 0x4E00);
-        assert_eq!(CJK_UNIFIED_IDEOGRAPHS.end, 0x9FFF);
+        assert_eq!(CJK_UNIFIED_IDEOGRAPHS.end, 0xA000);
+    }
+
+    #[test]
+    fn test_unicode_blocks_include_first_and_last_code_point() {
+        let blocks = [
+            (LATIN_1_SUPPLEMENT, 0xA0, 0xFF),
+            (LATIN_EXTENDED_A, 0x100, 0x17F),
+            (LATIN_EXTENDED_B, 0x180, 0x24F),
+            (LATIN_EXTENDED_ADDITIONAL, 0x1E00, 0x1EFF),
+            (CYRILLIC, 0x400, 0x4FF),
+            (CYRILLIC_SUPPLEMENT, 0x500, 0x52F),
+            (GREEK, 0x370, 0x3FF),
+            (GREEK_EXTENDED, 0x1F00, 0x1FFF),
+            (ARABIC, 0x600, 0x6FF),
+            (ARABIC_SUPPLEMENT, 0x750, 0x77F),
+            (HEBREW, 0x590, 0x5FF),
+            (CJK_UNIFIED_IDEOGRAPHS, 0x4E00, 0x9FFF),
+            (HIRAGANA, 0x3040, 0x309F),
+            (KATAKANA, 0x30A0, 0x30FF),
+            (HANGUL_SYLLABLES, 0xAC00, 0xD7AF),
+            (DEVANAGARI, 0x900, 0x97F),
+            (THAI, 0xE00, 0xE7F),
+            (VIETNAMESE_EXTENSIONS, 0x1EA0, 0x1EFF),
+        ];
+        for (block, first, last) in blocks {
+            assert!(
+                block.contains(&first),
+                "{block:?} should contain {first:#X}"
+            );
+            assert!(block.contains(&last), "{block:?} should contain {last:#X}");
+            assert!(
+                !block.contains(&(last + 1)),
+                "{block:?} should end at {last:#X}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_french_ranges_include_y_diaeresis() {
+        let ranges = get_locale_ranges("fr").unwrap();
+        assert!(ranges.iter().any(|range| range.contains(&u32::from('ÿ'))));
+    }
+
+    #[test]
+    fn test_japanese_ranges_merge_and_format() {
+        let mut buffer = [0..0, 0..0, 0..0, 0..0];
+        buffer.clone_from_slice(get_locale_ranges("ja").unwrap());
+        let length = merge_contiguous_ranges_in_place(&mut buffer);
+        assert_eq!(
+            format_ranges(&buffer[..length]),
+            "32-126,12352-12543,19968-40959"
+        );
     }
 
     #[test]
@@ -424,7 +476,7 @@ mod tests {
     fn test_format_ranges_multiple() {
         let ranges = vec![&BASIC_LATIN, &LATIN_1_SUPPLEMENT];
         let result = format_ranges(ranges);
-        assert_eq!(result, "32-126,160-254");
+        assert_eq!(result, "32-126,160-255");
     }
 
     #[test]
