@@ -30,6 +30,10 @@ alloc = []
 std = ["alloc"]
 backend-json = ["embedded-i18n-macros/backend-json"]
 backend-po = ["embedded-i18n-macros/backend-po"]
+backend-mo = ["embedded-i18n-macros/backend-mo"]
+backend-yaml = ["embedded-i18n-macros/backend-yaml"]
+backend-toml = ["embedded-i18n-macros/backend-toml"]
+backend-fluent = ["embedded-i18n-macros/backend-fluent"]
 
 [package.metadata.docs.rs]
-features = ["std", "backend-json", "backend-po"]
+all-features = true

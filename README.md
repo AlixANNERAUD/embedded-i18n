@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/embedded-i18n)](https://docs.rs/embedded-i18n)
 [![codecov](https://codecov.io/github/AlixANNERAUD/embedded-i18n/graph/badge.svg?token=0C27GIS0BK)](https://codecov.io/github/AlixANNERAUD/embedded-i18n)
 
-Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON or GNU gettext PO locale files and embeds them directly into ROM, no runtime loading, no allocator required for translations.
+Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON, YAML, TOML, GNU gettext PO/MO or Fluent locale files and embeds them directly into ROM, no runtime loading, no allocator required for translations.
 
 ## Installation
 
@@ -33,9 +33,34 @@ let greeting = translate!("Hello, world!");
 ```json
 {
   "Hello, world!": "Bonjour le monde !",
-  "Missing argument: {}": "Argument manquant : {}"
+  "Missing argument: {}": "Argument manquant : {}",
+  "menu": {
+    "settings": {
+      "title": "Paramètres"
+    }
+  }
 }
 ```
+
+Nested objects are flattened to dotted keys: `translate!("menu.settings.title")`. Values must be strings or objects, and a key defined twice (e.g. `"menu.settings.title"` and the nested form) is a compile error.
+
+### Locale files - YAML and TOML
+
+```yaml
+greeting: Bonjour
+menu:
+  settings:
+    title: Paramètres
+```
+
+```toml
+greeting = "Bonjour"
+
+[menu.settings]
+title = "Paramètres"
+```
+
+Nesting works like JSON. YAML files can use the `.yaml` or `.yml` extension.
 
 ### Locale files - GNU gettext PO
 
@@ -48,6 +73,20 @@ msgstr "Argument manquant : {}"
 ```
 
 Like `msgfmt`, entries flagged `#, fuzzy` and entries with an empty `msgstr` are ignored, so they resolve through the fallback locale.
+
+Compiled gettext catalogs (`.mo`, little or big endian) are supported by the `backend-mo` feature.
+
+### Locale files - Fluent
+
+```ftl
+-brand = Acme
+hello = Hello, { $user-name }!
+about = About { -brand }
+login = Log in
+    .placeholder = Email
+```
+
+Simple Fluent messages are supported: text, message and term references, string and number literals, and attributes (as `login.placeholder`). Variables become named format placeholders (`{ $user-name }` → `{user_name}`) for `translate_args!()` and `translate_write!()`. Select expressions, functions and parameterized terms are reported as compile errors.
 
 ### Build configuration
 
@@ -104,7 +143,7 @@ It expands to `include_bytes!` of each file inside an unused constant, so it add
 
 ### Locale resolution
 
-Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18N_PATH`) at compile time. The enabled backends determine which file formats are tried (`.json` is tried first, then `.po`). The locale and fallback are selected via environment variables:
+Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18N_PATH`) at compile time. The enabled backends determine which file formats are tried, in this order: `.json`, `.yaml` / `.yml`, `.toml`, `.po`, `.mo`, `.ftl`. The locale and fallback are selected via environment variables:
 
 | Env variable             | Default | Description                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------- |
@@ -179,19 +218,23 @@ With the `alloc` feature, `format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S")` return
 | -------------- | ------------------------------------------------------------------------------------ |
 | `backend-json` | **Default.** JSON locale files via `serde_json`.                                     |
 | `backend-po`   | GNU gettext PO locale files (`.po`).                                                 |
+| `backend-mo`   | Compiled GNU gettext locale files (`.mo`).                                           |
+| `backend-yaml` | YAML locale files (`.yaml`, `.yml`) via `yaml-rust2`.                                |
+| `backend-toml` | TOML locale files (`.toml`) via `toml`.                                              |
+| `backend-fluent` | Fluent locale files (`.ftl`, simple messages) via `fluent-syntax`.                 |
 | `alloc`        | `String` / `Vec` returning helpers (`format_unix_timestamp`, `format_ranges`, ...)   |
 | `std`          | Enables `alloc` and runtime locale getters (`get_locale_build()`, ...)               |
 
 ### Backend selection
 
-By default the JSON backend is enabled. To use PO files instead, disable default features:
+By default the JSON backend is enabled. To use another format, disable default features:
 
 ```toml
 [dependencies]
 embedded-i18n = { version = "0.1", default-features = false, features = ["backend-po"] }
 ```
 
-Both backends can be enabled simultaneously, the first matching file wins (JSON first, then PO).
+Several backends can be enabled simultaneously, the first matching file wins (see [Locale resolution](#locale-resolution)). All parsing happens in the proc macro at compile time: the backends add no code and no dependency to the firmware.
 
 ## `no_std` Support
 

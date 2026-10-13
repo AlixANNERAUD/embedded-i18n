@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 /// Backend: GNU gettext PO locale files (.po)
-pub const EXTENSION: &str = "po";
+pub const EXTENSIONS: &[&str] = &["po"];
 
 pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
     let content =
