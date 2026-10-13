@@ -95,6 +95,21 @@
 //!
 //! - `alloc`: `String` and `Vec` returning variants of the helpers.
 //! - `std`: enables `alloc` and the build environment getters.
+//!
+//! # Guide
+//!
+//! The [`guide`] has one page per topic: [locale files](guide::locale_files),
+//! [translating](guide::translating), [message context](guide::context),
+//! [plural forms](guide::plurals), [select variants](guide::select),
+//! [formatting](guide::formatting), [rebuild tracking](guide::rebuild_tracking),
+//! [configuration](guide::configuration),
+//! [runtime locale selection](guide::runtime_locales),
+//! [translation coverage](guide::coverage),
+//! [right-to-left languages](guide::right_to_left),
+//! [pseudo-localization](guide::pseudo_localization),
+//! [date and time](guide::date_time), [Unicode ranges](guide::unicode_ranges),
+//! [`no_std` support](guide::no_std) and a
+//! [comparison with other crates](guide::comparison).
 #![no_std]
 #![deny(missing_docs)]
 
@@ -108,6 +123,7 @@ extern crate std;
 
 mod date_time;
 mod direction;
+pub mod guide;
 mod range;
 mod selection;
 mod time;
