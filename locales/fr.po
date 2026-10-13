@@ -15,3 +15,6 @@ msgstr "Valeur : {}"
 
 msgid "c_greeting"
 msgstr "Bonjour du C"
+
+msgid "with_named_args"
+msgstr "Bonjour {name}, vous avez {count} messages"

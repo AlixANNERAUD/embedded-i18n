@@ -152,20 +152,19 @@ impl Parse for Input {
     }
 }
 
-fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
-    let input: Input = syn::parse2(input)?;
-    let span = input.key.span();
+fn translation(key: &Key, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
+    let span = key.span();
     let catalog = catalog
         .as_ref()
         .map_err(|error| syn::Error::new(span, error))?;
-    let key = input.key.value()?;
+    let name = key.value()?;
 
-    let value = catalog.translations.get(&key).ok_or_else(|| {
+    let value = catalog.translations.get(&name).ok_or_else(|| {
         syn::Error::new(
             span,
             format!(
                 "translation for {:?} not found in locale {:?} or fallback {:?} ({})",
-                key,
+                name,
                 catalog.locale,
                 catalog.fallback,
                 catalog.path.display()
@@ -173,7 +172,7 @@ fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result
         )
     })?;
 
-    match input.key {
+    match key {
         Key::Str(_) => {
             let value = LitStr::new(value, span);
             Ok(quote! { #value })
@@ -182,13 +181,81 @@ fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result
             let value = CString::new(value.as_str()).map_err(|_| {
                 syn::Error::new(
                     span,
-                    format!("translation for {:?} contains a nul byte", key),
+                    format!("translation for {:?} contains a nul byte", name),
                 )
             })?;
             let value = LitCStr::new(&value, span);
             Ok(quote! { #value })
         }
     }
+}
+
+fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
+    let input: Input = syn::parse2(input)?;
+    translation(&input.key, catalog)
+}
+
+struct FormatInput {
+    key: Key,
+    arguments: TokenStream2,
+}
+
+impl Parse for FormatInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let key = match input.parse()? {
+            Key::Str(literal) => Key::Str(literal),
+            Key::CStr(literal) => {
+                return Err(syn::Error::new(
+                    literal.span(),
+                    "expected a string literal, C strings cannot be used as format strings",
+                ));
+            }
+        };
+        if !input.is_empty() {
+            input.parse::<syn::Token![,]>()?;
+        }
+        Ok(FormatInput {
+            key,
+            arguments: input.parse()?,
+        })
+    }
+}
+
+struct WriteInput {
+    writer: syn::Expr,
+    format: FormatInput,
+}
+
+impl Parse for WriteInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let writer = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        Ok(WriteInput {
+            writer,
+            format: input.parse()?,
+        })
+    }
+}
+
+fn expand_args(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    let input: FormatInput = syn::parse2(input)?;
+    let format = translation(&input.key, catalog)?;
+    let arguments = input.arguments;
+    Ok(quote! { ::core::format_args!(#format, #arguments) })
+}
+
+fn expand_write(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    let input: WriteInput = syn::parse2(input)?;
+    let writer = input.writer;
+    let format = translation(&input.format.key, catalog)?;
+    let arguments = input.format.arguments;
+    Ok(quote! { ::core::write!(#writer, #format, #arguments) })
 }
 
 fn expand_track_locales(
@@ -222,6 +289,20 @@ pub fn track_locales(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {
     expand(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro]
+pub fn translate_args(input: TokenStream) -> TokenStream {
+    expand_args(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro]
+pub fn translate_write(input: TokenStream) -> TokenStream {
+    expand_write(input.into(), &CATALOG)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -412,5 +493,79 @@ mod tests {
         );
         let catalog = load_catalog(directory.path(), "en", "en").unwrap();
         assert_eq!(catalog.files, vec![directory.path().join("en.json")]);
+    }
+
+    #[test]
+    fn args_expands_to_format_args() {
+        let tokens = expand_args(
+            quote! { "greeting", name = user, 42 },
+            &catalog(&[("greeting", "Bonjour {name} {}")]),
+        )
+        .unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! { ::core::format_args!("Bonjour {name} {}", name = user, 42) }.to_string()
+        );
+    }
+
+    #[test]
+    fn args_without_arguments() {
+        let tokens =
+            expand_args(quote! { "greeting" }, &catalog(&[("greeting", "Bonjour")])).unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! { ::core::format_args!("Bonjour",) }.to_string()
+        );
+    }
+
+    #[test]
+    fn args_rejects_c_string() {
+        assert!(
+            expand_args(quote! { c"greeting" }, &catalog(&[("greeting", "Bonjour")]))
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("C strings cannot be used as format strings")
+        );
+    }
+
+    #[test]
+    fn args_requires_comma() {
+        assert!(
+            expand_args(
+                quote! { "greeting" 42 },
+                &catalog(&[("greeting", "Bonjour")])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn write_expands_to_write() {
+        let tokens = expand_write(
+            quote! { &mut output, "greeting", 42 },
+            &catalog(&[("greeting", "Bonjour {}")]),
+        )
+        .unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! { ::core::write!(&mut output, "Bonjour {}", 42) }.to_string()
+        );
+    }
+
+    #[test]
+    fn write_requires_key() {
+        assert!(expand_write(quote! { output }, &catalog(&[])).is_err());
+    }
+
+    #[test]
+    fn write_reports_missing_key() {
+        assert!(
+            expand_write(quote! { output, "missing" }, &catalog(&[]))
+                .err()
+                .unwrap()
+                .to_string()
+                .starts_with("translation for \"missing\" not found")
+        );
     }
 }
