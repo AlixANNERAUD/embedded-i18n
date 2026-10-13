@@ -71,6 +71,27 @@ let c: &'static CStr = translate!(c"Hello");
 
 Fails to compile if the key is not found in either the selected locale or the fallback locale. The expansion is a plain literal, so it can be used in `const` items and as the format string of `format!` / `write!`.
 
+### `translate_args!()` and `translate_write!()`
+
+Format a translation with arguments without allocating. The translated string becomes the format string, so placeholders are checked against the arguments at compile time:
+
+```rust
+use core::fmt::Write;
+use embedded_i18n::{translate_args, translate_write};
+
+// "Hello {name}, you have {count} messages"
+let name = "Ada";
+translate_write!(&mut display, "inbox", count = 3)?;
+
+// Anywhere `format_args!` is accepted
+log::info!("{}", translate_args!("inbox", name = name, count = 3));
+```
+
+- `translate_args!(key, args...)` expands to `core::format_args!(<translation>, args...)`.
+- `translate_write!(writer, key, args...)` expands to `core::write!(writer, <translation>, args...)`, so the writer needs `core::fmt::Write` (or `std::io::Write`) in scope.
+- Positional (`{}`), named (`{name}` with `name = value`) and implicitly captured variables (`{name}` with a `name` binding in scope) are supported.
+- With an allocator, `format!(translate!(key), args...)` works too, but only with explicit arguments.
+
 ### `track_locales!()`
 
 Cargo does not know that `translate!()` reads the locale files, so editing them would not rebuild your crate. Invoke `track_locales!()` once, at module level, to make the crate depend on every locale file loaded for the build:

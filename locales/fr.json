@@ -2,5 +2,6 @@
   "greeting": "Bonjour",
   "farewell": "Au revoir",
   "with_arg": "Valeur : {}",
-  "c_greeting": "Bonjour du C"
+  "c_greeting": "Bonjour du C",
+  "with_named_args": "Bonjour {name}, vous avez {count} messages"
 }

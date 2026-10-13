@@ -18,3 +18,6 @@ msgstr "Hello from C"
 
 msgid "missing_in_french"
 msgstr "Only in English"
+
+msgid "with_named_args"
+msgstr "Hello {name}, you have {count} messages"
