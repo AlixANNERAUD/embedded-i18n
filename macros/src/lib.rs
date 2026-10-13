@@ -11,6 +11,7 @@ use syn::{Lit, LitCStr, LitStr};
 
 #[cfg(feature = "backend-json")]
 mod json;
+mod locale;
 #[cfg(feature = "backend-po")]
 mod po;
 
@@ -18,8 +19,7 @@ type Translations = HashMap<String, String>;
 
 struct Catalog {
     path: PathBuf,
-    locale: String,
-    fallback: String,
+    chain: Vec<String>,
     files: Vec<PathBuf>,
     translations: HashMap<String, String>,
 }
@@ -48,31 +48,33 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
         return Err(format!("locales directory not found: {}", path.display()));
     }
 
+    let chain = locale::chain(locale, fallback);
     let mut translations = HashMap::new();
+    let mut empty = HashMap::new();
     let mut files = Vec::new();
 
-    if let Some((file, entries)) = load_locale(path, locale)? {
-        files.push(file);
-        for (key, value) in entries {
-            if !value.is_empty() {
-                translations.insert(key, value);
+    for locale in &chain {
+        if let Some((file, entries)) = load_locale(path, locale)? {
+            if !files.contains(&file) {
+                files.push(file);
+            }
+            for (key, value) in entries {
+                if value.is_empty() {
+                    empty.entry(key).or_insert(value);
+                } else {
+                    translations.entry(key).or_insert(value);
+                }
             }
         }
     }
 
-    if let Some((file, entries)) = load_locale(path, fallback)? {
-        if !files.contains(&file) {
-            files.push(file);
-        }
-        for (key, value) in entries {
-            translations.entry(key).or_insert(value);
-        }
+    for (key, value) in empty {
+        translations.entry(key).or_insert(value);
     }
 
     Ok(Catalog {
         path: path.to_path_buf(),
-        locale: locale.to_string(),
-        fallback: fallback.to_string(),
+        chain,
         files,
         translations,
     })
@@ -80,25 +82,25 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
 
 #[allow(unused_variables)]
 fn load_locale(path: &Path, locale: &str) -> Result<Option<(PathBuf, Translations)>, String> {
-    let locale = locale.to_lowercase();
-
-    #[cfg(feature = "backend-json")]
-    {
-        let file = path.join(format!("{}.{}", locale, json::EXTENSION));
-        if file.exists() {
-            return json::load(&file)
-                .map(|entries| Some((file.clone(), entries)))
-                .map_err(|e| format!("{}: {}", file.display(), e));
+    for stem in locale::file_stems(locale) {
+        #[cfg(feature = "backend-json")]
+        {
+            let file = path.join(format!("{}.{}", stem, json::EXTENSION));
+            if file.is_file() {
+                return json::load(&file)
+                    .map(|entries| Some((file.clone(), entries)))
+                    .map_err(|e| format!("{}: {}", file.display(), e));
+            }
         }
-    }
 
-    #[cfg(feature = "backend-po")]
-    {
-        let file = path.join(format!("{}.{}", locale, po::EXTENSION));
-        if file.exists() {
-            return po::load(&file)
-                .map(|entries| Some((file.clone(), entries)))
-                .map_err(|e| format!("{}: {}", file.display(), e));
+        #[cfg(feature = "backend-po")]
+        {
+            let file = path.join(format!("{}.{}", stem, po::EXTENSION));
+            if file.is_file() {
+                return po::load(&file)
+                    .map(|entries| Some((file.clone(), entries)))
+                    .map_err(|e| format!("{}: {}", file.display(), e));
+            }
         }
     }
 
@@ -170,10 +172,14 @@ fn translation(key: &Key, catalog: &Result<Catalog, String>) -> syn::Result<Toke
         syn::Error::new(
             span,
             format!(
-                "translation for {:?} not found in locale {:?} or fallback {:?} ({})",
+                "translation for {:?} not found in locales {} ({})",
                 name,
-                catalog.locale,
-                catalog.fallback,
+                catalog
+                    .chain
+                    .iter()
+                    .map(|locale| format!("{:?}", locale))
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 catalog.path.display()
             ),
         )
@@ -321,8 +327,7 @@ mod tests {
     fn catalog(entries: &[(&str, &str)]) -> Result<Catalog, String> {
         Ok(Catalog {
             path: PathBuf::from("locales"),
-            locale: "fr".to_string(),
-            fallback: "en".to_string(),
+            chain: vec!["fr".to_string(), "en".to_string()],
             files: vec![
                 PathBuf::from("/locales/fr.json"),
                 PathBuf::from("/locales/en.json"),
@@ -406,7 +411,7 @@ mod tests {
     fn reports_missing_key() {
         assert_eq!(
             error(quote! { "missing" }, &catalog(&[])),
-            "translation for \"missing\" not found in locale \"fr\" or fallback \"en\" (locales)"
+            "translation for \"missing\" not found in locales \"fr\", \"en\" (locales)"
         );
     }
 
@@ -602,5 +607,44 @@ mod tests {
             locales_directory(Path::new("/workspace/app"), Some("/shared/i18n")),
             PathBuf::from("/shared/i18n")
         );
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn region_falls_back_to_language_then_fallbacks() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("fr_CA.json"),
+            r#"{"color": "Couleur (CA)"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("fr.json"),
+            r#"{"color": "Couleur", "door": "Porte", "empty": ""}"#,
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("de.json"), r#"{"bus": "Bus (de)"}"#).unwrap();
+        std::fs::write(
+            directory.path().join("en.json"),
+            r#"{"color": "Color", "door": "Door", "bus": "Bus", "train": "Train", "empty": ""}"#,
+        )
+        .unwrap();
+        let catalog = load_catalog(directory.path(), "fr-ca", "de,en").unwrap();
+        assert_eq!(catalog.chain, ["fr-CA", "fr", "de", "en"]);
+        assert_eq!(catalog.translations["color"], "Couleur (CA)");
+        assert_eq!(catalog.translations["door"], "Porte");
+        assert_eq!(catalog.translations["bus"], "Bus (de)");
+        assert_eq!(catalog.translations["train"], "Train");
+        assert_eq!(catalog.translations["empty"], "");
+        assert_eq!(catalog.files.len(), 4);
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn locale_file_names_are_matched_case_insensitively() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("zh-cn.json"), r#"{"hello": "你好"}"#).unwrap();
+        let catalog = load_catalog(directory.path(), "zh_CN", "en").unwrap();
+        assert_eq!(catalog.translations["hello"], "你好");
     }
 }
