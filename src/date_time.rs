@@ -1,13 +1,24 @@
+/// Month and weekday names, AM/PM markers and default patterns of a locale,
+/// used by [`DateTimeFormatter`](crate::DateTimeFormatter).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DateTimeLocale {
+    /// Month names in the form used in dates (`%B`), from January.
     pub months: [&'static str; 12],
+    /// Standalone month names (`%OB`), from January.
     pub months_standalone: [&'static str; 12],
+    /// Abbreviated month names (`%b`), from January.
     pub months_abbreviated: [&'static str; 12],
+    /// Weekday names (`%A`), from Sunday.
     pub weekdays: [&'static str; 7],
+    /// Abbreviated weekday names (`%a`), from Sunday.
     pub weekdays_abbreviated: [&'static str; 7],
+    /// Morning marker (`%p` before noon).
     pub am: &'static str,
+    /// Afternoon marker (`%p` from noon).
     pub pm: &'static str,
+    /// Date pattern (`%x`).
     pub date: &'static str,
+    /// Time pattern (`%X`).
     pub time: &'static str,
 }
 
@@ -48,6 +59,7 @@ const fn with_patterns(
 const TIME_24: &str = "%H:%M:%S";
 const TIME_12: &str = "%I:%M:%S %p";
 
+/// English (United States) names and patterns.
 pub const ENGLISH: DateTimeLocale = same_months(
     [
         "January",
@@ -1141,6 +1153,8 @@ const fn is(locale: &str, range: (usize, usize), candidate: &str) -> bool {
     true
 }
 
+/// Returns the built-in names and patterns of a locale, or `None` if the
+/// language is not covered.
 pub const fn find_date_time_locale(locale: &str) -> Option<DateTimeLocale> {
     let locale = locale.trim_ascii();
     let language = subtag(locale, 0);
@@ -1224,6 +1238,19 @@ pub const fn find_date_time_locale(locale: &str) -> Option<DateTimeLocale> {
     })
 }
 
+/// Returns the built-in names and patterns of a locale, English if the language
+/// is not covered.
+///
+/// Called in `const` context, only the selected locale is linked; called with
+/// a runtime string, the whole table is.
+///
+/// ```
+/// use embedded_i18n::date_time_locale;
+///
+/// const FRENCH: embedded_i18n::DateTimeLocale = date_time_locale("fr-CA");
+/// assert_eq!(FRENCH.months[7], "août");
+/// assert_eq!(FRENCH.date, "%Y-%m-%d");
+/// ```
 pub const fn date_time_locale(locale: &str) -> DateTimeLocale {
     match find_date_time_locale(locale) {
         Some(found) => found,
@@ -1254,6 +1281,8 @@ const fn build_date_time_locale() -> DateTimeLocale {
     ENGLISH
 }
 
+/// Names and patterns of the build locale, resolved at compile time from
+/// `EMBEDDED_I18N_LOCALE`, then each fallback locale, then English.
 pub const DATE_TIME_LOCALE: DateTimeLocale = build_date_time_locale();
 
 #[cfg(test)]

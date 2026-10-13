@@ -34,6 +34,19 @@ const fn contains(list: &[&str], bytes: &[u8], start: usize, end: usize) -> bool
     false
 }
 
+/// Returns whether a locale is written right to left.
+///
+/// Recognizes right-to-left languages (`ar`, `he`, `fa`, `ur`, `ps`, `sd`, `ug`,
+/// `yi`...) and the `Arab` and `Hebr` script subtags, case-insensitively, with
+/// `-` or `_` separators. Usable in `const` context.
+///
+/// ```
+/// use embedded_i18n::is_right_to_left;
+///
+/// assert!(is_right_to_left("ar-EG"));
+/// assert!(is_right_to_left("pa_Arab"));
+/// assert!(!is_right_to_left("fr-CA"));
+/// ```
 pub const fn is_right_to_left(locale: &str) -> bool {
     let bytes = locale.as_bytes();
     let mut start = 0;
@@ -56,6 +69,12 @@ pub const fn is_right_to_left(locale: &str) -> bool {
     false
 }
 
+/// Returns whether the build locale ([`get_locale`](crate::get_locale)) is
+/// written right to left, to mirror layouts at compile time.
+///
+/// ```
+/// const MIRRORED: bool = embedded_i18n::is_locale_right_to_left();
+/// ```
 pub const fn is_locale_right_to_left() -> bool {
     is_right_to_left(crate::get_locale())
 }

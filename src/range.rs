@@ -4,26 +4,58 @@ use core::ops::Range;
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
+/// Basic Latin (printable ASCII) code points, as a half-open range.
 pub const BASIC_LATIN: Range<u32> = 0x20..0x7F;
+/// Latin-1 Supplement code points, as a half-open range.
 pub const LATIN_1_SUPPLEMENT: Range<u32> = 0xA0..0xFF;
+/// Latin Extended-A code points, as a half-open range.
 pub const LATIN_EXTENDED_A: Range<u32> = 0x100..0x17F;
+/// Latin Extended-B code points, as a half-open range.
 pub const LATIN_EXTENDED_B: Range<u32> = 0x180..0x24F;
+/// Latin Extended Additional code points, as a half-open range.
 pub const LATIN_EXTENDED_ADDITIONAL: Range<u32> = 0x1E00..0x1EFF;
+/// Cyrillic code points, as a half-open range.
 pub const CYRILLIC: Range<u32> = 0x400..0x4FF;
+/// Cyrillic Supplement code points, as a half-open range.
 pub const CYRILLIC_SUPPLEMENT: Range<u32> = 0x500..0x52F;
+/// Greek and Coptic code points, as a half-open range.
 pub const GREEK: Range<u32> = 0x370..0x3FF;
+/// Greek Extended code points, as a half-open range.
 pub const GREEK_EXTENDED: Range<u32> = 0x1F00..0x1FFF;
+/// Arabic code points, as a half-open range.
 pub const ARABIC: Range<u32> = 0x600..0x6FF;
+/// Arabic Supplement code points, as a half-open range.
 pub const ARABIC_SUPPLEMENT: Range<u32> = 0x750..0x77F;
+/// Hebrew code points, as a half-open range.
 pub const HEBREW: Range<u32> = 0x590..0x5FF;
+/// CJK Unified Ideographs code points, as a half-open range.
 pub const CJK_UNIFIED_IDEOGRAPHS: Range<u32> = 0x4E00..0x9FFF;
+/// Hiragana code points, as a half-open range.
 pub const HIRAGANA: Range<u32> = 0x3040..0x309F;
+/// Katakana code points, as a half-open range.
 pub const KATAKANA: Range<u32> = 0x30A0..0x30FF;
+/// Hangul Syllables code points, as a half-open range.
 pub const HANGUL_SYLLABLES: Range<u32> = 0xAC00..0xD7AF;
+/// Devanagari code points, as a half-open range.
 pub const DEVANAGARI: Range<u32> = 0x900..0x97F;
+/// Thai code points, as a half-open range.
 pub const THAI: Range<u32> = 0xE00..0xE7F;
+/// Vietnamese letters of Latin Extended Additional code points, as a half-open range.
 pub const VIETNAMESE_EXTENSIONS: Range<u32> = 0x1EA0..0x1EFF;
 
+/// Returns the Unicode ranges needed to render a language, to subset fonts.
+///
+/// Returns `None` for unsupported locales. Supported: `en`, `fr`, `de`, `es`,
+/// `it`, `pt`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`,
+/// `uk`, `be`, `el`, `ar`, `he`, `ja`, `zh`, `zh-CN`, `zh-TW`, `ko`, `hi`, `th`
+/// and `vi`.
+///
+/// ```
+/// use embedded_i18n::{get_locale_ranges, BASIC_LATIN};
+///
+/// assert_eq!(get_locale_ranges("en"), Some(&[BASIC_LATIN][..]));
+/// assert!(get_locale_ranges("xx").is_none());
+/// ```
 pub fn get_locale_ranges(locale: &str) -> Option<&'static [Range<u32>]> {
     let ranges: &[Range<u32>] = match locale {
         "en" => &[BASIC_LATIN],
@@ -88,6 +120,19 @@ pub fn get_locale_ranges(locale: &str) -> Option<&'static [Range<u32>]> {
     Some(ranges)
 }
 
+/// Sorts ranges and merges overlapping or adjacent ones, in place and without
+/// allocation.
+///
+/// Returns the number of merged ranges, which are stored at the start of the
+/// slice.
+///
+/// ```
+/// use embedded_i18n::merge_contiguous_ranges_in_place;
+///
+/// let mut ranges = [10..20, 0..5, 15..30, 5..8];
+/// let length = merge_contiguous_ranges_in_place(&mut ranges);
+/// assert_eq!(ranges[..length], [0..8, 10..30]);
+/// ```
 pub fn merge_contiguous_ranges_in_place(ranges: &mut [Range<u32>]) -> usize {
     if ranges.is_empty() {
         return 0;
@@ -111,6 +156,8 @@ pub fn merge_contiguous_ranges_in_place(ranges: &mut [Range<u32>]) -> usize {
     length
 }
 
+/// Sorts ranges and merges overlapping or adjacent ones. Available with the
+/// `alloc` feature.
 #[cfg(feature = "alloc")]
 pub fn merge_contiguous_ranges(ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
     let mut ranges = ranges;
@@ -119,6 +166,8 @@ pub fn merge_contiguous_ranges(ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
     ranges
 }
 
+/// Writes a range as `start-end` (inclusive end), or `start` for a single code
+/// point.
 pub fn write_range<W: Write>(writer: &mut W, range: &Range<u32>) -> fmt::Result {
     if range.start + 1 == range.end {
         write!(writer, "{}", range.start)
@@ -127,6 +176,16 @@ pub fn write_range<W: Write>(writer: &mut W, range: &Range<u32>) -> fmt::Result 
     }
 }
 
+/// Writes ranges as a comma separated list, as accepted by font subsetting tools.
+///
+/// ```
+/// use embedded_i18n::write_ranges;
+///
+/// let mut output = String::new();
+/// write_ranges(&mut output, &[32..127, 160..161])?;
+/// assert_eq!(output, "32-126,160");
+/// # Ok::<(), core::fmt::Error>(())
+/// ```
 pub fn write_ranges<'a, W: Write>(
     writer: &mut W,
     ranges: impl IntoIterator<Item = &'a Range<u32>>,
@@ -140,6 +199,7 @@ pub fn write_ranges<'a, W: Write>(
     Ok(())
 }
 
+/// Formats a range like [`write_range`]. Available with the `alloc` feature.
 #[cfg(feature = "alloc")]
 pub fn format_range(range: &Range<u32>) -> String {
     let mut output = String::new();
@@ -147,6 +207,7 @@ pub fn format_range(range: &Range<u32>) -> String {
     output
 }
 
+/// Formats ranges like [`write_ranges`]. Available with the `alloc` feature.
 #[cfg(feature = "alloc")]
 pub fn format_ranges<'a>(ranges: impl IntoIterator<Item = &'a Range<u32>>) -> String {
     let mut output = String::new();

@@ -30,6 +30,8 @@ jobs:
 
       - name: Documentation
         run: cargo doc --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
 
       - name: Test without alloc
         run: cargo test --workspace --no-default-features --features backend-json,backend-po
