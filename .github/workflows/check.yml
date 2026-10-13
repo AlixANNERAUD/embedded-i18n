@@ -61,3 +61,34 @@ jobs:
 
       - name: Package
         run: cargo package --workspace
+
+  no-std:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [backend-json, backend-po]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+
+      - name: Build
+        run: cargo build --target thumbv7em-none-eabihf --no-default-features --features ${{ matrix.backend }}
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read MSRV
+        id: msrv
+        run: echo "version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "embedded-i18n") | .rust_version')" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - name: Test
+        run: cargo test --workspace --all-features --locked

@@ -4,6 +4,7 @@ members = ["macros"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/AlixANNERAUD/embedded-i18n"
 authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
@@ -12,6 +13,7 @@ authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
 name = "embedded-i18n"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
