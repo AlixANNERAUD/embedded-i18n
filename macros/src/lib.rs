@@ -225,25 +225,132 @@ impl Catalog {
     }
 }
 
-static CATALOG: LazyLock<Result<Catalog, String>> = LazyLock::new(|| {
-    let manifest_directory = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|_| "CARGO_MANIFEST_DIR is not set".to_string())?;
+struct Catalogs {
+    multiple: bool,
+    catalogs: Vec<Result<Catalog, String>>,
+}
+
+const MAXIMUM_LOCALES: usize = 255;
+
+static CATALOGS: LazyLock<Catalogs> = LazyLock::new(|| {
+    let embedded = std::env::var("EMBEDDED_I18N_LOCALES").unwrap_or_default();
+    let embedded = embedded_locales(&embedded);
     let locale = std::env::var("EMBEDDED_I18N_LOCALE").unwrap_or_else(|_| "en".to_string());
-    let fallback = std::env::var("EMBEDDED_I18N_FALLBACK").unwrap_or_else(|_| "en".to_string());
-    let path = locales_directory(
-        Path::new(&manifest_directory),
-        std::env::var("EMBEDDED_I18N_PATH").ok().as_deref(),
-    );
-    let options = Options {
-        strict: is_enabled(std::env::var("EMBEDDED_I18N_STRICT").ok().as_deref()),
-        isolate: is_enabled(
-            std::env::var("EMBEDDED_I18N_BIDI_ISOLATION")
-                .ok()
-                .as_deref(),
-        ),
+    let load = |locale: &str| -> Result<Catalog, String> {
+        let manifest_directory = std::env::var("CARGO_MANIFEST_DIR")
+            .map_err(|_| "CARGO_MANIFEST_DIR is not set".to_string())?;
+        let fallback = std::env::var("EMBEDDED_I18N_FALLBACK").unwrap_or_else(|_| "en".to_string());
+        let path = locales_directory(
+            Path::new(&manifest_directory),
+            std::env::var("EMBEDDED_I18N_PATH").ok().as_deref(),
+        );
+        let options = Options {
+            strict: is_enabled(std::env::var("EMBEDDED_I18N_STRICT").ok().as_deref()),
+            isolate: is_enabled(
+                std::env::var("EMBEDDED_I18N_BIDI_ISOLATION")
+                    .ok()
+                    .as_deref(),
+            ),
+        };
+        load_catalog(&path, locale, &fallback, options)
     };
-    load_catalog(&path, &locale, &fallback, options)
+    if embedded.is_empty() {
+        return Catalogs {
+            multiple: false,
+            catalogs: vec![load(&locale)],
+        };
+    }
+    if embedded.len() > MAXIMUM_LOCALES {
+        return Catalogs {
+            multiple: true,
+            catalogs: vec![Err(format!(
+                "EMBEDDED_I18N_LOCALES lists {} locales, at most {} are supported",
+                embedded.len(),
+                MAXIMUM_LOCALES
+            ))],
+        };
+    }
+    Catalogs {
+        multiple: true,
+        catalogs: embedded.into_iter().map(load).collect(),
+    }
 });
+
+fn embedded_locales(list: &str) -> Vec<&str> {
+    list.split(',')
+        .map(str::trim_ascii)
+        .filter(|locale| !locale.is_empty())
+        .collect()
+}
+
+type Expansion = fn(TokenStream2, &Result<Catalog, String>) -> syn::Result<TokenStream2>;
+
+fn locale_index() -> TokenStream2 {
+    quote! { ::embedded_i18n::locale_index() }
+}
+
+fn localized(
+    input: TokenStream2,
+    catalogs: &Catalogs,
+    expand: Expansion,
+    combine: fn(Vec<TokenStream2>) -> TokenStream2,
+) -> syn::Result<TokenStream2> {
+    if !catalogs.multiple {
+        return expand(input, &catalogs.catalogs[0]);
+    }
+    let mut values = Vec::new();
+    let mut errors: Option<syn::Error> = None;
+    for catalog in &catalogs.catalogs {
+        match expand(input.clone(), catalog) {
+            Ok(value) => values.push(value),
+            Err(error) => match &mut errors {
+                Some(errors) => errors.combine(error),
+                None => errors = Some(error),
+            },
+        }
+    }
+    match errors {
+        Some(errors) => Err(errors),
+        None if values.len() == 1 => Ok(values.remove(0)),
+        None => Ok(combine(values)),
+    }
+}
+
+fn combine_array(values: Vec<TokenStream2>) -> TokenStream2 {
+    let index = locale_index();
+    quote! { (&[#(#values),*])[#index] }
+}
+
+fn combine_match(mut values: Vec<TokenStream2>) -> TokenStream2 {
+    let index = locale_index();
+    let last = values.pop();
+    let indexes = 0..values.len();
+    quote! {
+        match #index {
+            #(#indexes => #values,)*
+            _ => #last,
+        }
+    }
+}
+
+fn expand_args_localized(input: TokenStream2, catalogs: &Catalogs) -> syn::Result<TokenStream2> {
+    if !catalogs.multiple {
+        return expand_args(input, &catalogs.catalogs[0]);
+    }
+    let formatter = proc_macro2::Ident::new("formatter", Span::mixed_site());
+    let body = localized(
+        quote! { #formatter, #input },
+        catalogs,
+        expand_write,
+        combine_match,
+    )?;
+    Ok(quote! {
+        ::core::format_args!(
+            "{}",
+            ::embedded_i18n::__FormatWith(|#formatter: &mut ::core::fmt::Formatter<'_>| #body)
+        )
+    })
+}
 
 #[derive(Clone, Copy, Default)]
 struct Options {
@@ -844,20 +951,22 @@ fn expand_write(
     Ok(quote! { ::core::write!(#writer, #format, #arguments) })
 }
 
-fn expand_track_locales(
-    input: TokenStream2,
-    catalog: &Result<Catalog, String>,
-) -> syn::Result<TokenStream2> {
+fn expand_track_locales(input: TokenStream2, catalogs: &Catalogs) -> syn::Result<TokenStream2> {
     if !input.is_empty() {
         return Err(syn::Error::new_spanned(input, "unexpected argument"));
     }
-    let catalog = catalog
-        .as_ref()
-        .map_err(|error| syn::Error::new(Span::call_site(), error))?;
-    let files = catalog
-        .files
-        .iter()
-        .map(|file| file.to_string_lossy().into_owned());
+    let mut files: Vec<String> = Vec::new();
+    for catalog in &catalogs.catalogs {
+        let catalog = catalog
+            .as_ref()
+            .map_err(|error| syn::Error::new(Span::call_site(), error))?;
+        for file in &catalog.files {
+            let file = file.to_string_lossy().into_owned();
+            if !files.contains(&file) {
+                files.push(file);
+            }
+        }
+    }
     Ok(quote! {
         const _: () = {
             #(const _: &[u8] = include_bytes!(#files);)*
@@ -867,56 +976,56 @@ fn expand_track_locales(
 
 #[proc_macro]
 pub fn track_locales(input: TokenStream) -> TokenStream {
-    expand_track_locales(input.into(), &CATALOG)
+    expand_track_locales(input.into(), &CATALOGS)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {
-    expand(input.into(), &CATALOG)
+    localized(input.into(), &CATALOGS, expand, combine_array)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate_plural(input: TokenStream) -> TokenStream {
-    expand_plural(input.into(), &CATALOG)
+    localized(input.into(), &CATALOGS, expand_plural, combine_match)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate_plural_write(input: TokenStream) -> TokenStream {
-    expand_plural_write(input.into(), &CATALOG)
+    localized(input.into(), &CATALOGS, expand_plural_write, combine_match)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate_select(input: TokenStream) -> TokenStream {
-    expand_select(input.into(), &CATALOG)
+    localized(input.into(), &CATALOGS, expand_select, combine_match)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate_select_write(input: TokenStream) -> TokenStream {
-    expand_select_write(input.into(), &CATALOG)
+    localized(input.into(), &CATALOGS, expand_select_write, combine_match)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate_args(input: TokenStream) -> TokenStream {
-    expand_args(input.into(), &CATALOG)
+    expand_args_localized(input.into(), &CATALOGS)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
 #[proc_macro]
 pub fn translate_write(input: TokenStream) -> TokenStream {
-    expand_write(input.into(), &CATALOG)
+    localized(input.into(), &CATALOGS, expand_write, combine_match)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -955,6 +1064,13 @@ mod tests {
     ))]
     fn get<'a>(catalog: &'a Catalog, key: &str) -> &'a str {
         catalog.lookup(&[key.to_string()], false).unwrap()
+    }
+
+    fn single(catalog: Result<Catalog, String>) -> Catalogs {
+        Catalogs {
+            multiple: false,
+            catalogs: vec![catalog],
+        }
     }
 
     fn error(input: TokenStream2, catalog: &Result<Catalog, String>) -> String {
@@ -1093,7 +1209,7 @@ mod tests {
 
     #[test]
     fn track_locales_includes_loaded_files() {
-        let tokens = expand_track_locales(quote! {}, &catalog(&[])).unwrap();
+        let tokens = expand_track_locales(quote! {}, &single(catalog(&[]))).unwrap();
         assert_eq!(
             tokens.to_string(),
             quote! {
@@ -1108,7 +1224,7 @@ mod tests {
 
     #[test]
     fn track_locales_rejects_arguments() {
-        let error = expand_track_locales(quote! { "locales" }, &catalog(&[]))
+        let error = expand_track_locales(quote! { "locales" }, &single(catalog(&[])))
             .err()
             .unwrap();
         assert_eq!(error.to_string(), "unexpected argument");
@@ -1843,5 +1959,166 @@ mod tests {
             catalog.lookup(&["hello".to_string()], false).unwrap(),
             "مرحبا {name}"
         );
+    }
+
+    fn multiple(locales: Vec<Result<Catalog, String>>) -> Catalogs {
+        Catalogs {
+            multiple: true,
+            catalogs: locales,
+        }
+    }
+
+    fn english_and_french() -> Catalogs {
+        multiple(vec![
+            locale_catalog(
+                "en",
+                messages(&[
+                    ("greeting", "Hello {name}"),
+                    ("files.one", "file"),
+                    ("files.other", "files"),
+                ]),
+            ),
+            locale_catalog(
+                "fr",
+                messages(&[
+                    ("greeting", "Bonjour {name}"),
+                    ("files.one", "fichier"),
+                    ("files.other", "fichiers"),
+                ]),
+            ),
+        ])
+    }
+
+    #[test]
+    fn parses_embedded_locales() {
+        assert_eq!(embedded_locales(" en, fr_CA ,,de "), ["en", "fr_CA", "de"]);
+        assert!(embedded_locales("").is_empty());
+        assert!(embedded_locales(" , ").is_empty());
+    }
+
+    #[test]
+    fn single_mode_keeps_literals() {
+        let tokens = localized(
+            quote! { "greeting" },
+            &single(catalog(&[("greeting", "Bonjour")])),
+            expand,
+            combine_array,
+        )
+        .unwrap();
+        assert_eq!(tokens.to_string(), quote! { "Bonjour" }.to_string());
+    }
+
+    #[test]
+    fn multiple_mode_indexes_an_array() {
+        let tokens = localized(
+            quote! { "greeting" },
+            &english_and_french(),
+            expand,
+            combine_array,
+        )
+        .unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                (&["Hello {name}", "Bonjour {name}"])[::embedded_i18n::locale_index()]
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn multiple_mode_matches_on_the_locale() {
+        let tokens = localized(
+            quote! { output, "greeting", name = "Ada" },
+            &english_and_french(),
+            expand_write,
+            combine_match,
+        )
+        .unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                match ::embedded_i18n::locale_index() {
+                    0usize => ::core::write!(output, "Hello {name}", name = "Ada"),
+                    _ => ::core::write!(output, "Bonjour {name}", name = "Ada"),
+                }
+            }
+            .to_string()
+        );
+        assert!(
+            localized(
+                quote! { "files", 2 },
+                &english_and_french(),
+                expand_plural,
+                combine_match
+            )
+            .unwrap()
+            .to_string()
+            .contains("\"fichiers\"")
+        );
+    }
+
+    #[test]
+    fn multiple_mode_formats_through_a_closure() {
+        let tokens =
+            expand_args_localized(quote! { "greeting", name = "Ada" }, &english_and_french())
+                .unwrap()
+                .to_string();
+        assert!(
+            tokens
+                .starts_with(":: core :: format_args ! (\"{}\" , :: embedded_i18n :: __FormatWith")
+        );
+        assert!(tokens.contains("\"Bonjour {name}\""));
+    }
+
+    #[test]
+    fn multiple_mode_reports_every_missing_locale() {
+        let catalogs = multiple(vec![
+            locale_catalog("en", messages(&[])),
+            locale_catalog("fr", messages(&[])),
+        ]);
+        let error = localized(quote! { "greeting" }, &catalogs, expand, combine_array)
+            .err()
+            .unwrap();
+        let messages: Vec<String> = error.into_iter().map(|error| error.to_string()).collect();
+        assert_eq!(
+            messages,
+            [
+                "translation for \"greeting\" not found in locales \"en\" (locales)",
+                "translation for \"greeting\" not found in locales \"fr\" (locales)",
+            ]
+        );
+    }
+
+    #[test]
+    fn single_embedded_locale_needs_no_dispatch() {
+        let catalogs = multiple(vec![locale_catalog(
+            "fr",
+            messages(&[("greeting", "Salut")]),
+        )]);
+        let tokens = localized(quote! { "greeting" }, &catalogs, expand, combine_array).unwrap();
+        assert_eq!(tokens.to_string(), quote! { "Salut" }.to_string());
+    }
+
+    #[test]
+    fn track_locales_lists_files_of_every_locale() {
+        let with_files = |name: &str, files: &[&str]| {
+            Ok(Catalog {
+                path: PathBuf::from("locales"),
+                chain: vec![name.to_string()],
+                primary: vec![name.to_string()],
+                strict: false,
+                files: files.iter().map(PathBuf::from).collect(),
+                locales: Vec::new(),
+            })
+        };
+        let catalogs = multiple(vec![
+            with_files("fr", &["/l/fr.json", "/l/en.json"]),
+            with_files("de", &["/l/de.json", "/l/en.json"]),
+        ]);
+        let tokens = expand_track_locales(quote! {}, &catalogs)
+            .unwrap()
+            .to_string();
+        assert_eq!(tokens.matches("include_bytes").count(), 3);
     }
 }
