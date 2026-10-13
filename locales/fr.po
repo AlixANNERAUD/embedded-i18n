@@ -18,3 +18,11 @@ msgstr "Bonjour du C"
 
 msgid "with_named_args"
 msgstr "Bonjour {name}, vous avez {count} messages"
+
+msgctxt "menu"
+msgid "Open"
+msgstr "Ouvrir"
+
+msgctxt "state"
+msgid "Open"
+msgstr "Ouvert"

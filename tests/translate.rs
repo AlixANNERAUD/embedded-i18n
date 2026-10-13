@@ -134,3 +134,27 @@ fn translate_write_captures_variables() {
         b"Hello Eve, you have 5 messages"
     );
 }
+
+#[test]
+fn translate_with_context() {
+    assert_eq!(translate!(context = "menu", "Open"), "Open (menu)");
+    assert_eq!(translate!(context = "state", "Open"), "Open (state)");
+}
+
+#[test]
+fn translate_with_context_and_c_string() {
+    assert_eq!(
+        translate!(context = "menu", c"Open").to_bytes(),
+        b"Open (menu)"
+    );
+}
+
+#[test]
+fn translate_write_with_context() {
+    let mut buffer = Buffer {
+        bytes: [0; 64],
+        length: 0,
+    };
+    embedded_i18n::translate_write!(&mut buffer, context = "state", "Open").unwrap();
+    assert_eq!(&buffer.bytes[..buffer.length], b"Open (state)");
+}
