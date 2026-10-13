@@ -13,6 +13,8 @@ pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
     let mut in_msgid = false;
     let mut in_msgstr = false;
     let mut in_header = false;
+    let mut fuzzy = false;
+    let mut next_fuzzy = false;
 
     for line in content.lines() {
         let line = line.trim();
@@ -26,7 +28,13 @@ pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
                 &mut in_header,
                 &mut in_msgid,
                 &mut in_msgstr,
+                &mut fuzzy,
             );
+            if line.is_empty() {
+                next_fuzzy = false;
+            } else if is_fuzzy_flag(line) {
+                next_fuzzy = true;
+            }
             continue;
         }
 
@@ -39,7 +47,10 @@ pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
                 &mut in_header,
                 &mut in_msgid,
                 &mut in_msgstr,
+                &mut fuzzy,
             );
+            fuzzy = next_fuzzy;
+            next_fuzzy = false;
             current_msgid = parse_po_string(value);
             in_msgid = true;
             in_msgstr = false;
@@ -97,9 +108,15 @@ pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
         &mut in_header,
         &mut in_msgid,
         &mut in_msgstr,
+        &mut fuzzy,
     );
 
     Ok(translations)
+}
+
+fn is_fuzzy_flag(line: &str) -> bool {
+    line.strip_prefix("#,")
+        .is_some_and(|flags| flags.split(',').any(|flag| flag.trim() == "fuzzy"))
 }
 
 fn parse_po_string(s: &str) -> String {
@@ -142,10 +159,12 @@ fn flush_and_clear(
     in_header: &mut bool,
     in_msgid: &mut bool,
     in_msgstr: &mut bool,
+    fuzzy: &mut bool,
 ) {
     if (*in_msgid || *in_msgstr)
         && !current_msgid.is_empty()
         && !*in_header
+        && !*fuzzy
         && !current_msgstr.is_empty()
     {
         translations.insert(current_msgid.clone(), current_msgstr.clone());
@@ -155,6 +174,7 @@ fn flush_and_clear(
     *in_header = false;
     *in_msgid = false;
     *in_msgstr = false;
+    *fuzzy = false;
 }
 
 #[cfg(test)]
@@ -234,8 +254,48 @@ mod tests {
     }
 
     #[test]
-    fn test_po_fuzzy_flag() {
-        let content = b"# fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
+    fn test_po_fuzzy_entries_are_skipped() {
+        let content =
+            b"#, fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n\nmsgid \"World\"\nmsgstr \"Monde\"\n";
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content).unwrap();
+        let map = load(f.path()).unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("World").unwrap(), "Monde");
+    }
+
+    #[test]
+    fn test_po_combined_fuzzy_flags_are_skipped() {
+        let content = b"#: src/main.rs:1\n#, c-format, fuzzy\n#| msgid \"Helo\"\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content).unwrap();
+        let map = load(f.path()).unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_po_fuzzy_does_not_leak_to_next_entry() {
+        let content =
+            b"#, fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\nmsgid \"World\"\nmsgstr \"Monde\"\n";
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content).unwrap();
+        let map = load(f.path()).unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("World").unwrap(), "Monde");
+    }
+
+    #[test]
+    fn test_po_other_flags_are_kept() {
+        let content = b"#, c-format, no-fuzzy-ish\n# fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content).unwrap();
+        let map = load(f.path()).unwrap();
+        assert_eq!(map.get("Hello").unwrap(), "Bonjour");
+    }
+
+    #[test]
+    fn test_po_fuzzy_header_is_ignored() {
+        let content = b"#, fuzzy\nmsgid \"\"\nmsgstr \"\"\n\"Language: fr\\n\"\n\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
         let map = load(f.path()).unwrap();
