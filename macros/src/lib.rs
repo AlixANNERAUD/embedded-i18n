@@ -9,13 +9,44 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Lit, LitCStr, LitStr};
 
+#[cfg(feature = "backend-fluent")]
+mod fluent;
 #[cfg(feature = "backend-json")]
 mod json;
 mod locale;
+#[cfg(feature = "backend-mo")]
+mod mo;
 #[cfg(feature = "backend-po")]
 mod po;
+#[cfg(feature = "backend-toml")]
+mod toml;
+#[cfg(any(
+    feature = "backend-json",
+    feature = "backend-yaml",
+    feature = "backend-toml"
+))]
+mod tree;
+#[cfg(feature = "backend-yaml")]
+mod yaml;
 
 type Translations = HashMap<String, String>;
+
+type Loader = fn(&Path) -> Result<Translations, String>;
+
+const BACKENDS: &[(&[&str], Loader)] = &[
+    #[cfg(feature = "backend-json")]
+    (json::EXTENSIONS, json::load),
+    #[cfg(feature = "backend-yaml")]
+    (yaml::EXTENSIONS, yaml::load),
+    #[cfg(feature = "backend-toml")]
+    (toml::EXTENSIONS, toml::load),
+    #[cfg(feature = "backend-po")]
+    (po::EXTENSIONS, po::load),
+    #[cfg(feature = "backend-mo")]
+    (mo::EXTENSIONS, mo::load),
+    #[cfg(feature = "backend-fluent")]
+    (fluent::EXTENSIONS, fluent::load),
+];
 
 struct Catalog {
     path: PathBuf,
@@ -80,26 +111,16 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
     })
 }
 
-#[allow(unused_variables)]
 fn load_locale(path: &Path, locale: &str) -> Result<Option<(PathBuf, Translations)>, String> {
     for stem in locale::file_stems(locale) {
-        #[cfg(feature = "backend-json")]
-        {
-            let file = path.join(format!("{}.{}", stem, json::EXTENSION));
-            if file.is_file() {
-                return json::load(&file)
-                    .map(|entries| Some((file.clone(), entries)))
-                    .map_err(|e| format!("{}: {}", file.display(), e));
-            }
-        }
-
-        #[cfg(feature = "backend-po")]
-        {
-            let file = path.join(format!("{}.{}", stem, po::EXTENSION));
-            if file.is_file() {
-                return po::load(&file)
-                    .map(|entries| Some((file.clone(), entries)))
-                    .map_err(|e| format!("{}: {}", file.display(), e));
+        for (extensions, load) in BACKENDS {
+            for extension in *extensions {
+                let file = path.join(format!("{}.{}", stem, extension));
+                if file.is_file() {
+                    return load(&file)
+                        .map(|entries| Some((file.clone(), entries)))
+                        .map_err(|e| format!("{}: {}", file.display(), e));
+                }
             }
         }
     }
@@ -646,5 +667,78 @@ mod tests {
         std::fs::write(directory.path().join("zh-cn.json"), r#"{"hello": "你好"}"#).unwrap();
         let catalog = load_catalog(directory.path(), "zh_CN", "en").unwrap();
         assert_eq!(catalog.translations["hello"], "你好");
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn nested_json_keys_are_flattened() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("en.json"),
+            r#"{"menu": {"settings": {"title": "Settings"}}}"#,
+        )
+        .unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        assert_eq!(catalog.translations["menu.settings.title"], "Settings");
+    }
+
+    #[cfg(feature = "backend-yaml")]
+    #[test]
+    fn loads_yaml_and_yml_files() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("fr.yml"), "menu:\n  open: Ouvrir\n").unwrap();
+        std::fs::write(directory.path().join("en.yaml"), "menu:\n  open: Open\n").unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
+        assert_eq!(catalog.translations["menu.open"], "Ouvrir");
+        assert_eq!(catalog.files.len(), 2);
+    }
+
+    #[cfg(feature = "backend-toml")]
+    #[test]
+    fn loads_toml_files() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("en.toml"),
+            "[menu]\nopen = \"Open\"\n",
+        )
+        .unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        assert_eq!(catalog.translations["menu.open"], "Open");
+    }
+
+    #[cfg(feature = "backend-fluent")]
+    #[test]
+    fn loads_fluent_files() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("en.ftl"),
+            "hello = Hello, { $name }!\n",
+        )
+        .unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        assert_eq!(catalog.translations["hello"], "Hello, {name}!");
+    }
+
+    #[cfg(feature = "backend-mo")]
+    #[test]
+    fn reports_invalid_mo_file() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("en.mo"), [0u8; 28]).unwrap();
+        let error = load_catalog(directory.path(), "en", "en").err().unwrap();
+        assert!(error.contains("en.mo"));
+    }
+
+    #[cfg(all(feature = "backend-json", feature = "backend-po"))]
+    #[test]
+    fn json_takes_precedence_over_po() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("en.json"), r#"{"a": "json"}"#).unwrap();
+        std::fs::write(
+            directory.path().join("en.po"),
+            "msgid \"a\"\nmsgstr \"po\"\n",
+        )
+        .unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        assert_eq!(catalog.translations["a"], "json");
     }
 }
