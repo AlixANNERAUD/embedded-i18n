@@ -34,6 +34,11 @@ jobs:
       - name: Test without alloc
         run: cargo test --workspace --no-default-features --features backend-json,backend-po
 
+      - name: Test multiple locales
+        run: |
+          EMBEDDED_I18N_LOCALES=en,fr cargo test --test multi_locale
+          EMBEDDED_I18N_LOCALES=en,fr cargo test --test multi_locale --no-default-features --features backend-po
+
       - name: Test and Coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 

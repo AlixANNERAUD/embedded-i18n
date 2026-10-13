@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate self as embedded_i18n;
+
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
@@ -9,11 +11,13 @@ extern crate std;
 mod date_time;
 mod direction;
 mod range;
+mod selection;
 mod time;
 
 pub use date_time::*;
 pub use direction::*;
 pub use range::*;
+pub use selection::*;
 pub use time::*;
 
 pub use embedded_i18n_macros::{

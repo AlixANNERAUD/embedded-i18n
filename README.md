@@ -245,6 +245,7 @@ Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18
 | Env variable             | Default | Description                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------- |
 | `EMBEDDED_I18N_LOCALE`   | `en`    | Primary locale                                                 |
+| `EMBEDDED_I18N_LOCALES`  | unset   | Comma separated locales to embed for runtime selection (see [Runtime locale selection](#runtime-locale-selection)) |
 | `EMBEDDED_I18N_FALLBACK` | `en`    | Comma separated fallback locales (keys missing from the primary locale are looked up here, in order) |
 | `EMBEDDED_I18N_PATH`     | `locales` | Locale files directory, relative to the `Cargo.toml` of the crate calling `translate!()`, or absolute |
 | `EMBEDDED_I18N_BIDI_ISOLATION` | unset | When set, placeholders of right-to-left locales are wrapped in Unicode bidi isolates (see [Right-to-left languages](#right-to-left-languages)) |
@@ -260,6 +261,34 @@ EMBEDDED_I18N_PATH = { value = "i18n", relative = true }
 ```
 
 A missing directory is reported as a compile error naming the resolved path.
+
+### Runtime locale selection
+
+By default a firmware contains one locale and every macro expands to a literal. To let the user pick a language at runtime (a settings menu, a DIP switch...), list the locales to embed:
+
+```sh
+EMBEDDED_I18N_LOCALES=en,fr,de EMBEDDED_I18N_LOCALE=en cargo build
+```
+
+```rust
+use embedded_i18n::{locale, set_locale, translate, LOCALES};
+
+assert_eq!(LOCALES, ["en", "fr", "de"]);
+assert_eq!(translate!("greeting"), "Hello");
+
+set_locale("fr")?;
+assert_eq!(locale(), "fr");
+assert_eq!(translate!("greeting"), "Bonjour");
+```
+
+- Each embedded locale is resolved at compile time with its own fallback chain (`EMBEDDED_I18N_FALLBACK`), and every message must be found for every embedded locale, otherwise the build fails and lists each locale missing it.
+- `EMBEDDED_I18N_LOCALE` selects the locale active at startup (the first embedded one if it is not listed).
+- `set_locale()` / `set_locale_index()` change the current locale, `locale()` / `locale_index()` read it, `LOCALES` lists the embedded locales. The current locale is an `AtomicU8` used with plain loads and stores, so it works on targets without compare-and-swap (e.g. `thumbv6m`) and needs no allocation or critical section.
+- `translate!()` expands to an index into a static array with one entry per locale. The plural, select and write macros expand to a `match` on the locale index, and `translate_args!()` formats through a closure (formatting flags such as width are not applied to the whole message).
+- `translate!()` is then a runtime value: it cannot be used in `const` items or as the format string of `format!` / `write!`; use `translate_args!()` and `translate_write!()` instead.
+- `DATE_TIME_LOCALE` keeps following `EMBEDDED_I18N_LOCALE`; use `date_time_locale(locale())` to format dates in the current locale (this links the date and time names of every supported locale).
+
+ROM cost: every embedded locale adds its strings for each message used (identical strings are usually merged by the linker), plus, per `translate!()` call site, a table of one string reference per locale (2 words each) and a few instructions to index it. The other macros cost one comparison per embedded locale at each call site. With a single embedded locale (`EMBEDDED_I18N_LOCALES=fr`), the expansion stays a literal.
 
 ### Translation coverage
 
