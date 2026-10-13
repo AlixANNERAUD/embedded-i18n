@@ -1,7 +1,8 @@
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
+use core::fmt::{self, Write};
 use core::ops::Range;
+
+#[cfg(feature = "alloc")]
+use alloc::{string::String, vec::Vec};
 
 pub const BASIC_LATIN: Range<u32> = 0x20..0x7F;
 pub const LATIN_1_SUPPLEMENT: Range<u32> = 0xA0..0xFF;
@@ -87,48 +88,73 @@ pub fn get_locale_ranges(locale: &str) -> Option<&'static [Range<u32>]> {
     Some(ranges)
 }
 
-pub fn merge_contiguous_ranges(ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
+pub fn merge_contiguous_ranges_in_place(ranges: &mut [Range<u32>]) -> usize {
     if ranges.is_empty() {
-        return ranges;
+        return 0;
     }
 
-    let mut sorted_ranges = ranges;
-    sorted_ranges.sort_by_key(|r| r.start);
+    ranges.sort_unstable_by_key(|range| range.start);
 
-    let mut merged_ranges = Vec::new();
-    let mut current_range = sorted_ranges[0].clone();
+    let mut length = 1;
 
-    for range in sorted_ranges.into_iter().skip(1) {
+    for index in 1..ranges.len() {
+        let range = ranges[index].clone();
+        let current_range = &mut ranges[length - 1];
         if range.start <= current_range.end {
             current_range.end = current_range.end.max(range.end);
         } else {
-            merged_ranges.push(current_range);
-            current_range = range;
+            ranges[length] = range;
+            length += 1;
         }
     }
 
-    merged_ranges.push(current_range);
-
-    merged_ranges
+    length
 }
 
-pub fn format_range(range: &Range<u32>) -> String {
+#[cfg(feature = "alloc")]
+pub fn merge_contiguous_ranges(ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
+    let mut ranges = ranges;
+    let length = merge_contiguous_ranges_in_place(&mut ranges);
+    ranges.truncate(length);
+    ranges
+}
+
+pub fn write_range<W: Write>(writer: &mut W, range: &Range<u32>) -> fmt::Result {
     if range.start + 1 == range.end {
-        format!("{}", range.start)
+        write!(writer, "{}", range.start)
     } else {
-        format!("{}-{}", range.start, range.end - 1)
+        write!(writer, "{}-{}", range.start, range.end - 1)
     }
 }
 
-pub fn format_ranges<'a>(ranges: impl IntoIterator<Item = &'a Range<u32>>) -> String {
-    ranges
-        .into_iter()
-        .map(format_range)
-        .collect::<Vec<String>>()
-        .join(",")
+pub fn write_ranges<'a, W: Write>(
+    writer: &mut W,
+    ranges: impl IntoIterator<Item = &'a Range<u32>>,
+) -> fmt::Result {
+    for (index, range) in ranges.into_iter().enumerate() {
+        if index > 0 {
+            writer.write_char(',')?;
+        }
+        write_range(writer, range)?;
+    }
+    Ok(())
 }
 
-#[cfg(test)]
+#[cfg(feature = "alloc")]
+pub fn format_range(range: &Range<u32>) -> String {
+    let mut output = String::new();
+    let _ = write_range(&mut output, range);
+    output
+}
+
+#[cfg(feature = "alloc")]
+pub fn format_ranges<'a>(ranges: impl IntoIterator<Item = &'a Range<u32>>) -> String {
+    let mut output = String::new();
+    let _ = write_ranges(&mut output, ranges);
+    output
+}
+
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
 
@@ -379,5 +405,103 @@ mod tests {
     fn test_get_locale_ranges_turkish() {
         let ranges = get_locale_ranges("tr").unwrap();
         assert!(ranges.contains(&LATIN_1_SUPPLEMENT));
+    }
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    struct Buffer {
+        bytes: [u8; 64],
+        length: usize,
+    }
+
+    impl Buffer {
+        fn new() -> Self {
+            Buffer {
+                bytes: [0; 64],
+                length: 0,
+            }
+        }
+
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.bytes[..self.length]).unwrap()
+        }
+    }
+
+    impl Write for Buffer {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            let end = self.length + value.len();
+            if end > self.bytes.len() {
+                return Err(fmt::Error);
+            }
+            self.bytes[self.length..end].copy_from_slice(value.as_bytes());
+            self.length = end;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_single_code_point_range() {
+        let mut buffer = Buffer::new();
+        write_range(&mut buffer, &(65..66)).unwrap();
+        assert_eq!(buffer.as_str(), "65");
+    }
+
+    #[test]
+    fn write_ranges_joins_with_commas() {
+        let mut buffer = Buffer::new();
+        write_ranges(&mut buffer, &[0x20..0x7F, 0x3041..0x3097]).unwrap();
+        assert_eq!(buffer.as_str(), "32-126,12353-12438");
+    }
+
+    #[test]
+    fn write_empty_ranges() {
+        let mut buffer = Buffer::new();
+        write_ranges(&mut buffer, &[]).unwrap();
+        assert_eq!(buffer.as_str(), "");
+    }
+
+    #[test]
+    fn write_ranges_propagates_errors() {
+        let mut buffer = Buffer::new();
+        let ranges: [Range<u32>; 16] = core::array::from_fn(|index| {
+            let start = 100_000 * (index as u32 + 1);
+            start..start + 1000
+        });
+        assert!(write_ranges(&mut buffer, &ranges).is_err());
+    }
+
+    #[test]
+    fn merge_in_place_sorts_and_merges() {
+        let mut ranges = [10..20, 0..5, 4..8, 20..25, 30..40];
+        let length = merge_contiguous_ranges_in_place(&mut ranges);
+        assert_eq!(&ranges[..length], &[0..8, 10..25, 30..40]);
+    }
+
+    #[test]
+    fn merge_in_place_empty() {
+        let mut ranges: [Range<u32>; 0] = [];
+        assert_eq!(merge_contiguous_ranges_in_place(&mut ranges), 0);
+    }
+
+    #[test]
+    fn merge_in_place_contained_range() {
+        let mut ranges = [0..100, 10..20];
+        let length = merge_contiguous_ranges_in_place(&mut ranges);
+        assert_eq!(length, 1);
+        assert_eq!(ranges[0], 0..100);
+    }
+
+    #[test]
+    fn merge_in_place_locale_ranges() {
+        let mut ranges: [Range<u32>; 8] = core::array::from_fn(|_| 0..0);
+        let locale_ranges = get_locale_ranges("fr").unwrap();
+        ranges[..locale_ranges.len()].clone_from_slice(locale_ranges);
+        let length = merge_contiguous_ranges_in_place(&mut ranges[..locale_ranges.len()]);
+        let mut buffer = Buffer::new();
+        write_ranges(&mut buffer, &ranges[..length]).unwrap();
+        assert!(buffer.as_str().starts_with("32-126"));
     }
 }

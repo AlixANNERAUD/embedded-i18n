@@ -95,32 +95,38 @@ Translations are loaded from files in the `locales/` directory at compile time. 
 Map locales to Unicode code-point ranges for font subsetting:
 
 ```rust
-use embedded_i18n::{get_locale_ranges, merge_contiguous_ranges, format_ranges};
+use embedded_i18n::{get_locale_ranges, merge_contiguous_ranges_in_place, write_ranges};
 
 // Get ranges for a locale
 let ranges = get_locale_ranges("ja").unwrap();
 // -> [Basic Latin, Hiragana, Katakana, CJK Unified Ideographs]
 
-// Merge overlapping/adjacent ranges
-let merged = merge_contiguous_ranges(ranges.to_vec());
+// Sort and merge overlapping/adjacent ranges, without allocation
+let mut buffer = [0..0, 0..0, 0..0, 0..0];
+buffer.clone_from_slice(ranges);
+let length = merge_contiguous_ranges_in_place(&mut buffer);
 
-// Format for fontconfig-like syntax
-let s = format_ranges(merged.iter());
+// Format for fontconfig-like syntax into any `core::fmt::Write`
+write_ranges(&mut output, &buffer[..length])?;
 // -> "32-126,12353-12438,12449-12538,19968-40958"
 ```
+
+With the `alloc` feature, `merge_contiguous_ranges(Vec<Range<u32>>) -> Vec<Range<u32>>`, `format_range` and `format_ranges` return owned values instead.
 
 Supported locales: `en`, `fr`, `de`, `es`, `it`, `pt`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`, `uk`, `be`, `el`, `ar`, `he`, `ja`, `zh`, `zh-CN`, `zh-TW`, `ko`, `hi`, `th`, `vi`.
 
 ### Timestamp formatting
 
-`strftime`-style formatting without libc:
+`strftime`-style formatting without libc, written into any `core::fmt::Write`:
 
 ```rust
-use embedded_i18n::format_unix_timestamp;
+use embedded_i18n::write_unix_timestamp;
 
-let s = format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S");
+write_unix_timestamp(&mut output, 0, "%Y-%m-%d %H:%M:%S")?;
 // -> "1970-01-01 00:00:00"
 ```
+
+With the `alloc` feature, `format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S")` returns a `String`.
 
 | Token | Description                           |
 | ----- | ------------------------------------- |
@@ -140,7 +146,8 @@ let s = format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S");
 | -------------- | ------------------------------------------------------------------------------------ |
 | `backend-json` | **Default.** JSON locale files via `serde_json`.                                     |
 | `backend-po`   | GNU gettext PO locale files (`.po`).                                                 |
-| `std`          | Enables runtime locale getters (`get_locale_build()`, `get_fallback_locale_build()`) |
+| `alloc`        | `String` / `Vec` returning helpers (`format_unix_timestamp`, `format_ranges`, ...)   |
+| `std`          | Enables `alloc` and runtime locale getters (`get_locale_build()`, ...)               |
 
 ### Backend selection
 
@@ -155,7 +162,7 @@ Both backends can be enabled simultaneously, the first matching file wins (JSON 
 
 ## `no_std` Support
 
-This crate is `#![no_std]`-compatible by default. The `translate!()` macro, unicode range helpers, and timestamp formatting all work without an allocator. The `alloc` crate is only required for `String`-returning helpers (`format_unix_timestamp`, `format_ranges`).
+This crate is `#![no_std]` and needs no allocator by default. The `translate!()` macro, the Unicode range helpers and the timestamp formatting all work without `alloc`: they return `&'static` data, work in place or write into a `core::fmt::Write`. Enable the `alloc` feature for the `String` / `Vec` returning variants.
 
 ## Minimum Supported Rust Version
 

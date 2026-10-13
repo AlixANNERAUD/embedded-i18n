@@ -31,6 +31,9 @@ jobs:
       - name: Documentation
         run: cargo doc --all-features --no-deps
 
+      - name: Test without alloc
+        run: cargo test --workspace --no-default-features --features backend-json,backend-po
+
       - name: Test and Coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
@@ -66,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        backend: [backend-json, backend-po]
+        features: [backend-json, backend-po, "backend-json,alloc"]
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +78,7 @@ jobs:
           targets: thumbv7em-none-eabihf
 
       - name: Build
-        run: cargo build --target thumbv7em-none-eabihf --no-default-features --features ${{ matrix.backend }}
+        run: cargo build --target thumbv7em-none-eabihf --no-default-features --features ${{ matrix.features }}
 
   msrv:
     runs-on: ubuntu-latest
