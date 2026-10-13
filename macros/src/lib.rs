@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use once_cell::sync::Lazy;
 use proc_macro::TokenStream;
 use quote::quote;
 
@@ -9,7 +9,7 @@ mod json;
 #[cfg(feature = "backend-po")]
 mod po;
 
-static TRANSLATION_PATH: Lazy<std::path::PathBuf> = Lazy::new(|| {
+static TRANSLATION_PATH: LazyLock<std::path::PathBuf> = LazyLock::new(|| {
     let path = std::env::var("CARGO_MANIFEST_DIR")
         .map(std::path::PathBuf::from)
         .expect("CARGO_MANIFEST_DIR is not set");
@@ -18,13 +18,13 @@ static TRANSLATION_PATH: Lazy<std::path::PathBuf> = Lazy::new(|| {
         .expect("Failed to canonicalize path")
 });
 
-static LOCALE: Lazy<String> =
-    Lazy::new(|| std::env::var("EMBEDDED_I18N_LOCALE").unwrap_or_else(|_| "en".to_string()));
+static LOCALE: LazyLock<String> =
+    LazyLock::new(|| std::env::var("EMBEDDED_I18N_LOCALE").unwrap_or_else(|_| "en".to_string()));
 
-static FALLBACK_LOCALE: Lazy<String> =
-    Lazy::new(|| std::env::var("EMBEDDED_I18N_FALLBACK").unwrap_or_else(|_| "en".to_string()));
+static FALLBACK_LOCALE: LazyLock<String> =
+    LazyLock::new(|| std::env::var("EMBEDDED_I18N_FALLBACK").unwrap_or_else(|_| "en".to_string()));
 
-static TRANSLATION_MAP: Lazy<HashMap<String, String>> = Lazy::new(|| {
+static TRANSLATION_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
     let mut generated_items = HashMap::new();
 
     if let Some(translations) = load_locale(&LOCALE) {
