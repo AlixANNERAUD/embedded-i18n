@@ -47,6 +47,8 @@ msgid "Missing argument: {}"
 msgstr "Argument manquant : {}"
 ```
 
+Like `msgfmt`, entries flagged `#, fuzzy` and entries with an empty `msgstr` are ignored, so they resolve through the fallback locale.
+
 ### Build configuration
 
 ```sh
