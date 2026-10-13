@@ -247,6 +247,7 @@ Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18
 | `EMBEDDED_I18N_LOCALE`   | `en`    | Primary locale                                                 |
 | `EMBEDDED_I18N_FALLBACK` | `en`    | Comma separated fallback locales (keys missing from the primary locale are looked up here, in order) |
 | `EMBEDDED_I18N_PATH`     | `locales` | Locale files directory, relative to the `Cargo.toml` of the crate calling `translate!()`, or absolute |
+| `EMBEDDED_I18N_BIDI_ISOLATION` | unset | When set, placeholders of right-to-left locales are wrapped in Unicode bidi isolates (see [Right-to-left languages](#right-to-left-languages)) |
 | `EMBEDDED_I18N_STRICT`   | unset   | When set (`1`, `true`, ...), a message missing from the primary locale is a compile error instead of using the fallbacks |
 
 Locale identifiers are normalized like BCP 47 tags (`fr_ca`, `FR-CA` and `fr-CA` are the same locale), and region or script subtags are dropped one at a time before moving to the next fallback. With `EMBEDDED_I18N_LOCALE=fr-CA` and `EMBEDDED_I18N_FALLBACK=de,en`, a key is looked up in `fr-CA`, `fr`, `de`, then `en`. Locale files can be named `fr-CA`, `fr_CA`, `fr-ca` or `fr_ca`. Missing files are skipped and the first non-empty translation wins.
@@ -275,6 +276,37 @@ error: translation for "Settings" is missing from the primary locale "fr" (EMBED
 ```
 
 Running a strict build for each shipped locale in CI catches untranslated strings before release.
+
+### Right-to-left languages
+
+Interpolating a left-to-right value (a name, a number, a file name) into Arabic or Hebrew text can reorder the surrounding words. With `EMBEDDED_I18N_BIDI_ISOLATION=1`, every `{...}` placeholder of a message coming from a right-to-left locale is wrapped at compile time in Unicode isolates (U+2068 FIRST STRONG ISOLATE and U+2069 POP DIRECTIONAL ISOLATE), as Fluent does. It is off by default because many embedded text renderers do not implement the Unicode bidi algorithm and would draw the isolates as missing glyphs.
+
+The layout direction is available at compile time to mirror the UI:
+
+```rust
+use embedded_i18n::{is_locale_right_to_left, is_right_to_left};
+
+const MIRRORED: bool = is_locale_right_to_left();
+
+assert!(is_right_to_left("ar-EG"));
+assert!(is_right_to_left("ku-Arab"));
+```
+
+`is_right_to_left()` recognizes right-to-left languages (`ar`, `he`, `fa`, `ur`, `ps`, `sd`, `ug`, `yi`, ...) and the `Arab` / `Hebr` script subtags.
+
+### Pseudo-localization
+
+`EMBEDDED_I18N_LOCALE=pseudo` builds a pseudo-locale from the fallback locales, to check layouts for truncation, hardcoded strings and missing glyphs before real translations exist:
+
+```sh
+EMBEDDED_I18N_LOCALE=pseudo EMBEDDED_I18N_FALLBACK=en cargo run
+```
+
+```text
+Hello {name}  →  [Hélló {name} ~~]
+```
+
+Letters are accented with Latin-1 characters, the text is padded by about a third with `~` and wrapped in brackets, so clipped text is easy to spot. Placeholders and `{{` / `}}` escapes are preserved, so `translate_args!()`, `translate_write!()` and the plural and select macros keep working. Strict mode accepts every message of the pseudo-locale.
 
 ### Unicode range helpers
 
