@@ -21,3 +21,11 @@ msgstr "Only in English"
 
 msgid "with_named_args"
 msgstr "Hello {name}, you have {count} messages"
+
+msgctxt "menu"
+msgid "Open"
+msgstr "Open (menu)"
+
+msgctxt "state"
+msgid "Open"
+msgstr "Open (state)"

@@ -3,5 +3,11 @@
   "farewell": "Au revoir",
   "with_arg": "Valeur : {}",
   "c_greeting": "Bonjour du C",
-  "with_named_args": "Bonjour {name}, vous avez {count} messages"
+  "with_named_args": "Bonjour {name}, vous avez {count} messages",
+  "menu": {
+    "Open": "Ouvrir"
+  },
+  "state": {
+    "Open": "Ouvert"
+  }
 }

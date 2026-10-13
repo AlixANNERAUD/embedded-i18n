@@ -110,6 +110,33 @@ let c: &'static CStr = translate!(c"Hello");
 
 Fails to compile if the key is not found in either the selected locale or the fallback locale. The expansion is a plain literal, so it can be used in `const` items and as the format string of `format!` / `write!`.
 
+### Message context
+
+The same source string can need different translations (`Open` on a menu vs `Open` as a state). Pass a `context` before the key:
+
+```rust
+let action = translate!(context = "menu", "Open");
+let state = translate!(context = "state", "Open");
+```
+
+`context` is accepted by every macro (`translate!`, `translate_args!`, `translate_write!`) and works with C strings. The context is looked up as:
+
+- GNU gettext PO / MO: the `msgctxt` of the entry.
+
+  ```po
+  msgctxt "menu"
+  msgid "Open"
+  msgstr "Ouvrir"
+  ```
+
+- JSON, YAML, TOML and Fluent: a namespace named after the context, i.e. the key `menu.Open`.
+
+  ```json
+  { "menu": { "Open": "Ouvrir" } }
+  ```
+
+A key with a context never falls back to the same key without context.
+
 ### `translate_args!()` and `translate_write!()`
 
 Format a translation with arguments without allocating. The translated string becomes the format string, so placeholders are checked against the arguments at compile time:

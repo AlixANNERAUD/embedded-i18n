@@ -29,6 +29,8 @@ mod tree;
 #[cfg(feature = "backend-yaml")]
 mod yaml;
 
+pub(crate) const CONTEXT_SEPARATOR: char = '\u{4}';
+
 type Translations = HashMap<String, String>;
 
 type Loader = fn(&Path) -> Result<Translations, String>;
@@ -48,11 +50,34 @@ const BACKENDS: &[(&[&str], Loader)] = &[
     (fluent::EXTENSIONS, fluent::load),
 ];
 
+struct Locale {
+    translations: Translations,
+}
+
 struct Catalog {
     path: PathBuf,
     chain: Vec<String>,
     files: Vec<PathBuf>,
-    translations: HashMap<String, String>,
+    locales: Vec<Locale>,
+}
+
+impl Catalog {
+    fn lookup(&self, keys: &[String]) -> Option<&str> {
+        self.find(keys, |value| !value.is_empty())
+            .or_else(|| self.find(keys, |_| true))
+    }
+
+    fn find(&self, keys: &[String], accept: impl Fn(&str) -> bool) -> Option<&str> {
+        self.locales.iter().find_map(|locale| {
+            keys.iter().find_map(|key| {
+                locale
+                    .translations
+                    .get(key)
+                    .map(String::as_str)
+                    .filter(|value| accept(value))
+            })
+        })
+    }
 }
 
 static CATALOG: LazyLock<Result<Catalog, String>> = LazyLock::new(|| {
@@ -80,34 +105,23 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
     }
 
     let chain = locale::chain(locale, fallback);
-    let mut translations = HashMap::new();
-    let mut empty = HashMap::new();
     let mut files = Vec::new();
+    let mut locales = Vec::new();
 
     for locale in &chain {
-        if let Some((file, entries)) = load_locale(path, locale)? {
+        if let Some((file, translations)) = load_locale(path, locale)? {
             if !files.contains(&file) {
                 files.push(file);
-            }
-            for (key, value) in entries {
-                if value.is_empty() {
-                    empty.entry(key).or_insert(value);
-                } else {
-                    translations.entry(key).or_insert(value);
-                }
+                locales.push(Locale { translations });
             }
         }
-    }
-
-    for (key, value) in empty {
-        translations.entry(key).or_insert(value);
     }
 
     Ok(Catalog {
         path: path.to_path_buf(),
         chain,
         files,
-        translations,
+        locales,
     })
 }
 
@@ -165,36 +179,85 @@ impl Parse for Key {
     }
 }
 
-struct Input {
+struct Message {
+    context: Option<LitStr>,
     key: Key,
+}
+
+impl Message {
+    fn keys(&self, name: &str) -> Vec<String> {
+        match &self.context {
+            Some(context) => vec![
+                format!("{}{}{}", context.value(), CONTEXT_SEPARATOR, name),
+                format!("{}.{}", context.value(), name),
+            ],
+            None => vec![name.to_string()],
+        }
+    }
+
+    fn describe(&self, name: &str) -> String {
+        match &self.context {
+            Some(context) => format!("{:?} in context {:?}", name, context.value()),
+            None => format!("{:?}", name),
+        }
+    }
+}
+
+impl Parse for Message {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let context = if input.peek(syn::Ident) && input.peek2(syn::Token![=]) {
+            let option: syn::Ident = input.parse()?;
+            if option != "context" {
+                return Err(syn::Error::new(
+                    option.span(),
+                    format!("unknown option `{}`, expected `context`", option),
+                ));
+            }
+            input.parse::<syn::Token![=]>()?;
+            let context = input.parse()?;
+            input.parse::<syn::Token![,]>()?;
+            Some(context)
+        } else {
+            None
+        };
+        Ok(Message {
+            context,
+            key: input.parse()?,
+        })
+    }
+}
+
+struct Input {
+    message: Message,
 }
 
 impl Parse for Input {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let key = input.parse()?;
+        let message = input.parse()?;
         if input.peek(syn::Token![,]) {
             input.parse::<syn::Token![,]>()?;
         }
         if !input.is_empty() {
             return Err(input.error("unexpected argument"));
         }
-        Ok(Input { key })
+        Ok(Input { message })
     }
 }
 
-fn translation(key: &Key, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
+fn translation(message: &Message, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
+    let key = &message.key;
     let span = key.span();
     let catalog = catalog
         .as_ref()
         .map_err(|error| syn::Error::new(span, error))?;
     let name = key.value()?;
 
-    let value = catalog.translations.get(&name).ok_or_else(|| {
+    let value = catalog.lookup(&message.keys(&name)).ok_or_else(|| {
         syn::Error::new(
             span,
             format!(
-                "translation for {:?} not found in locales {} ({})",
-                name,
+                "translation for {} not found in locales {} ({})",
+                message.describe(&name),
                 catalog
                     .chain
                     .iter()
@@ -212,7 +275,7 @@ fn translation(key: &Key, catalog: &Result<Catalog, String>) -> syn::Result<Toke
             Ok(quote! { #value })
         }
         Key::CStr(_) => {
-            let value = CString::new(value.as_str()).map_err(|_| {
+            let value = CString::new(value).map_err(|_| {
                 syn::Error::new(
                     span,
                     format!("translation for {:?} contains a nul byte", name),
@@ -226,30 +289,28 @@ fn translation(key: &Key, catalog: &Result<Catalog, String>) -> syn::Result<Toke
 
 fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
     let input: Input = syn::parse2(input)?;
-    translation(&input.key, catalog)
+    translation(&input.message, catalog)
 }
 
 struct FormatInput {
-    key: Key,
+    message: Message,
     arguments: TokenStream2,
 }
 
 impl Parse for FormatInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let key = match input.parse()? {
-            Key::Str(literal) => Key::Str(literal),
-            Key::CStr(literal) => {
-                return Err(syn::Error::new(
-                    literal.span(),
-                    "expected a string literal, C strings cannot be used as format strings",
-                ));
-            }
-        };
+        let message: Message = input.parse()?;
+        if let Key::CStr(literal) = &message.key {
+            return Err(syn::Error::new(
+                literal.span(),
+                "expected a string literal, C strings cannot be used as format strings",
+            ));
+        }
         if !input.is_empty() {
             input.parse::<syn::Token![,]>()?;
         }
         Ok(FormatInput {
-            key,
+            message,
             arguments: input.parse()?,
         })
     }
@@ -276,7 +337,7 @@ fn expand_args(
     catalog: &Result<Catalog, String>,
 ) -> syn::Result<TokenStream2> {
     let input: FormatInput = syn::parse2(input)?;
-    let format = translation(&input.key, catalog)?;
+    let format = translation(&input.message, catalog)?;
     let arguments = input.arguments;
     Ok(quote! { ::core::format_args!(#format, #arguments) })
 }
@@ -287,7 +348,7 @@ fn expand_write(
 ) -> syn::Result<TokenStream2> {
     let input: WriteInput = syn::parse2(input)?;
     let writer = input.writer;
-    let format = translation(&input.format.key, catalog)?;
+    let format = translation(&input.format.message, catalog)?;
     let arguments = input.format.arguments;
     Ok(quote! { ::core::write!(#writer, #format, #arguments) })
 }
@@ -353,11 +414,23 @@ mod tests {
                 PathBuf::from("/locales/fr.json"),
                 PathBuf::from("/locales/en.json"),
             ],
-            translations: entries
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect(),
+            locales: vec![Locale {
+                translations: entries
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect(),
+            }],
         })
+    }
+
+    #[cfg(any(
+        feature = "backend-json",
+        feature = "backend-yaml",
+        feature = "backend-toml",
+        feature = "backend-fluent"
+    ))]
+    fn get<'a>(catalog: &'a Catalog, key: &str) -> &'a str {
+        catalog.lookup(&[key.to_string()]).unwrap()
     }
 
     fn error(input: TokenStream2, catalog: &Result<Catalog, String>) -> String {
@@ -482,9 +555,9 @@ mod tests {
         )
         .unwrap();
         let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
-        assert_eq!(catalog.translations["greeting"], "Bonjour");
-        assert_eq!(catalog.translations["empty"], "Empty");
-        assert_eq!(catalog.translations["only"], "Only");
+        assert_eq!(get(&catalog, "greeting"), "Bonjour");
+        assert_eq!(get(&catalog, "empty"), "Empty");
+        assert_eq!(get(&catalog, "only"), "Only");
     }
 
     #[test]
@@ -652,11 +725,11 @@ mod tests {
         .unwrap();
         let catalog = load_catalog(directory.path(), "fr-ca", "de,en").unwrap();
         assert_eq!(catalog.chain, ["fr-CA", "fr", "de", "en"]);
-        assert_eq!(catalog.translations["color"], "Couleur (CA)");
-        assert_eq!(catalog.translations["door"], "Porte");
-        assert_eq!(catalog.translations["bus"], "Bus (de)");
-        assert_eq!(catalog.translations["train"], "Train");
-        assert_eq!(catalog.translations["empty"], "");
+        assert_eq!(get(&catalog, "color"), "Couleur (CA)");
+        assert_eq!(get(&catalog, "door"), "Porte");
+        assert_eq!(get(&catalog, "bus"), "Bus (de)");
+        assert_eq!(get(&catalog, "train"), "Train");
+        assert_eq!(get(&catalog, "empty"), "");
         assert_eq!(catalog.files.len(), 4);
     }
 
@@ -666,7 +739,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("zh-cn.json"), r#"{"hello": "你好"}"#).unwrap();
         let catalog = load_catalog(directory.path(), "zh_CN", "en").unwrap();
-        assert_eq!(catalog.translations["hello"], "你好");
+        assert_eq!(get(&catalog, "hello"), "你好");
     }
 
     #[cfg(feature = "backend-json")]
@@ -679,7 +752,7 @@ mod tests {
         )
         .unwrap();
         let catalog = load_catalog(directory.path(), "en", "en").unwrap();
-        assert_eq!(catalog.translations["menu.settings.title"], "Settings");
+        assert_eq!(get(&catalog, "menu.settings.title"), "Settings");
     }
 
     #[cfg(feature = "backend-yaml")]
@@ -689,7 +762,7 @@ mod tests {
         std::fs::write(directory.path().join("fr.yml"), "menu:\n  open: Ouvrir\n").unwrap();
         std::fs::write(directory.path().join("en.yaml"), "menu:\n  open: Open\n").unwrap();
         let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
-        assert_eq!(catalog.translations["menu.open"], "Ouvrir");
+        assert_eq!(get(&catalog, "menu.open"), "Ouvrir");
         assert_eq!(catalog.files.len(), 2);
     }
 
@@ -703,7 +776,7 @@ mod tests {
         )
         .unwrap();
         let catalog = load_catalog(directory.path(), "en", "en").unwrap();
-        assert_eq!(catalog.translations["menu.open"], "Open");
+        assert_eq!(get(&catalog, "menu.open"), "Open");
     }
 
     #[cfg(feature = "backend-fluent")]
@@ -716,7 +789,7 @@ mod tests {
         )
         .unwrap();
         let catalog = load_catalog(directory.path(), "en", "en").unwrap();
-        assert_eq!(catalog.translations["hello"], "Hello, {name}!");
+        assert_eq!(get(&catalog, "hello"), "Hello, {name}!");
     }
 
     #[cfg(feature = "backend-mo")]
@@ -739,6 +812,82 @@ mod tests {
         )
         .unwrap();
         let catalog = load_catalog(directory.path(), "en", "en").unwrap();
-        assert_eq!(catalog.translations["a"], "json");
+        assert_eq!(get(&catalog, "a"), "json");
+    }
+
+    #[test]
+    fn context_uses_gettext_key_then_namespace() {
+        let tokens = expand(
+            quote! { context = "menu", "Open" },
+            &catalog(&[("menu\u{4}Open", "Ouvrir"), ("Open", "Ouvert")]),
+        )
+        .unwrap();
+        assert_eq!(tokens.to_string(), quote! { "Ouvrir" }.to_string());
+        let tokens = expand(
+            quote! { context = "menu", "Open" },
+            &catalog(&[("menu.Open", "Ouvrir"), ("Open", "Ouvert")]),
+        )
+        .unwrap();
+        assert_eq!(tokens.to_string(), quote! { "Ouvrir" }.to_string());
+    }
+
+    #[test]
+    fn context_does_not_fall_back_to_key_without_context() {
+        assert_eq!(
+            error(
+                quote! { context = "menu", "Open" },
+                &catalog(&[("Open", "Ouvert")])
+            ),
+            "translation for \"Open\" in context \"menu\" not found in locales \"fr\", \"en\" (locales)"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_option() {
+        assert_eq!(
+            error(quote! { scope = "menu", "Open" }, &catalog(&[])),
+            "unknown option `scope`, expected `context`"
+        );
+    }
+
+    #[test]
+    fn context_requires_string_literal_and_key() {
+        assert!(expand(quote! { context = menu, "Open" }, &catalog(&[])).is_err());
+        assert!(expand(quote! { context = "menu" }, &catalog(&[])).is_err());
+    }
+
+    #[test]
+    fn args_and_write_accept_context() {
+        let catalog = catalog(&[("menu\u{4}Open", "Ouvrir {}")]);
+        let tokens = expand_args(quote! { context = "menu", "Open", 1 }, &catalog).unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! { ::core::format_args!("Ouvrir {}", 1) }.to_string()
+        );
+        let tokens =
+            expand_write(quote! { output, context = "menu", "Open", 1 }, &catalog).unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! { ::core::write!(output, "Ouvrir {}", 1) }.to_string()
+        );
+    }
+
+    #[test]
+    fn earlier_locale_wins_across_key_forms() {
+        let catalog = Ok(Catalog {
+            path: PathBuf::from("locales"),
+            chain: vec!["fr".to_string(), "en".to_string()],
+            files: Vec::new(),
+            locales: vec![
+                Locale {
+                    translations: [("menu.Open".to_string(), "Ouvrir".to_string())].into(),
+                },
+                Locale {
+                    translations: [("menu\u{4}Open".to_string(), "Open".to_string())].into(),
+                },
+            ],
+        });
+        let tokens = expand(quote! { context = "menu", "Open" }, &catalog).unwrap();
+        assert_eq!(tokens.to_string(), quote! { "Ouvrir" }.to_string());
     }
 }
