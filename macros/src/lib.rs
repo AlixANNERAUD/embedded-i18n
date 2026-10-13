@@ -29,12 +29,19 @@ static CATALOG: LazyLock<Result<Catalog, String>> = LazyLock::new(|| {
         .map_err(|_| "CARGO_MANIFEST_DIR is not set".to_string())?;
     let locale = std::env::var("EMBEDDED_I18N_LOCALE").unwrap_or_else(|_| "en".to_string());
     let fallback = std::env::var("EMBEDDED_I18N_FALLBACK").unwrap_or_else(|_| "en".to_string());
-    load_catalog(
-        &PathBuf::from(manifest_directory).join("locales"),
-        &locale,
-        &fallback,
-    )
+    let path = locales_directory(
+        Path::new(&manifest_directory),
+        std::env::var("EMBEDDED_I18N_PATH").ok().as_deref(),
+    );
+    load_catalog(&path, &locale, &fallback)
 });
+
+fn locales_directory(manifest_directory: &Path, configured: Option<&str>) -> PathBuf {
+    match configured {
+        Some(path) if !path.is_empty() => manifest_directory.join(path),
+        _ => manifest_directory.join("locales"),
+    }
+}
 
 fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, String> {
     if !path.is_dir() {
@@ -566,6 +573,34 @@ mod tests {
                 .unwrap()
                 .to_string()
                 .starts_with("translation for \"missing\" not found")
+        );
+    }
+
+    #[test]
+    fn locales_directory_defaults_to_locales() {
+        assert_eq!(
+            locales_directory(Path::new("/crate"), None),
+            PathBuf::from("/crate/locales")
+        );
+        assert_eq!(
+            locales_directory(Path::new("/crate"), Some("")),
+            PathBuf::from("/crate/locales")
+        );
+    }
+
+    #[test]
+    fn locales_directory_relative_to_manifest() {
+        assert_eq!(
+            locales_directory(Path::new("/workspace/app"), Some("../i18n")),
+            PathBuf::from("/workspace/app/../i18n")
+        );
+    }
+
+    #[test]
+    fn locales_directory_absolute() {
+        assert_eq!(
+            locales_directory(Path::new("/workspace/app"), Some("/shared/i18n")),
+            PathBuf::from("/shared/i18n")
         );
     }
 }

@@ -104,12 +104,22 @@ It expands to `include_bytes!` of each file inside an unused constant, so it add
 
 ### Locale resolution
 
-Translations are loaded from files in the `locales/` directory at compile time. The enabled backends determine which file formats are tried (`.json` is tried first, then `.po`). The locale and fallback are selected via environment variables:
+Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18N_PATH`) at compile time. The enabled backends determine which file formats are tried (`.json` is tried first, then `.po`). The locale and fallback are selected via environment variables:
 
 | Env variable             | Default | Description                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------- |
 | `EMBEDDED_I18N_LOCALE`   | `en`    | Primary locale                                                 |
 | `EMBEDDED_I18N_FALLBACK` | `en`    | Fallback locale (keys missing from primary are looked up here) |
+| `EMBEDDED_I18N_PATH`     | `locales` | Locale files directory, relative to the `Cargo.toml` of the crate calling `translate!()`, or absolute |
+
+To share one set of locale files between the crates of a workspace, set the path once in `.cargo/config.toml` at the workspace root. `relative = true` makes it relative to that file:
+
+```toml
+[env]
+EMBEDDED_I18N_PATH = { value = "i18n", relative = true }
+```
+
+A missing directory is reported as a compile error naming the resolved path.
 
 ### Unicode range helpers
 
