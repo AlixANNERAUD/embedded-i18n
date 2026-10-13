@@ -109,8 +109,10 @@ Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18
 | Env variable             | Default | Description                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------- |
 | `EMBEDDED_I18N_LOCALE`   | `en`    | Primary locale                                                 |
-| `EMBEDDED_I18N_FALLBACK` | `en`    | Fallback locale (keys missing from primary are looked up here) |
+| `EMBEDDED_I18N_FALLBACK` | `en`    | Comma separated fallback locales (keys missing from the primary locale are looked up here, in order) |
 | `EMBEDDED_I18N_PATH`     | `locales` | Locale files directory, relative to the `Cargo.toml` of the crate calling `translate!()`, or absolute |
+
+Locale identifiers are normalized like BCP 47 tags (`fr_ca`, `FR-CA` and `fr-CA` are the same locale), and region or script subtags are dropped one at a time before moving to the next fallback. With `EMBEDDED_I18N_LOCALE=fr-CA` and `EMBEDDED_I18N_FALLBACK=de,en`, a key is looked up in `fr-CA`, `fr`, `de`, then `en`. Locale files can be named `fr-CA`, `fr_CA`, `fr-ca` or `fr_ca`. Missing files are skipped and the first non-empty translation wins.
 
 To share one set of locale files between the crates of a workspace, set the path once in `.cargo/config.toml` at the workspace root. `relative = true` makes it relative to that file:
 
