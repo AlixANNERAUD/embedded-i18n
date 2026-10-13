@@ -77,6 +77,34 @@ fn days_in_month(year: i64, month: usize) -> i64 {
     }
 }
 
+/// Formats Unix timestamps with `strftime`-style patterns, localized and
+/// without allocation.
+///
+/// | Token | Output |
+/// | --- | --- |
+/// | `%Y`, `%y` | Year, with and without century |
+/// | `%m`, `%d`, `%e` | Month, day, space-padded day |
+/// | `%H`, `%I`, `%M`, `%S` | Hour (24 and 12-hour), minute, second |
+/// | `%p` | Localized AM / PM marker |
+/// | `%B`, `%OB`, `%b` / `%h` | Localized month name, standalone, abbreviated |
+/// | `%A`, `%a` | Localized weekday name, abbreviated |
+/// | `%u`, `%w` | Weekday number from Monday (1-7), from Sunday (0-6) |
+/// | `%x`, `%X`, `%c` | Localized date, time, date and time |
+/// | `%z` | UTC offset (`+0200`) |
+/// | `%%` | `%` |
+///
+/// ```
+/// use embedded_i18n::{date_time_locale, DateTimeFormatter};
+///
+/// let formatter = DateTimeFormatter::new()
+///     .with_locale(date_time_locale("fr"))
+///     .with_utc_offset(2 * 3600);
+///
+/// let mut output = String::new();
+/// formatter.write(&mut output, 1_791_884_800, "%A %d %B %Y, %H:%M %z")?;
+/// assert_eq!(output, "mardi 13 octobre 2026, 11:46 +0200");
+/// # Ok::<(), core::fmt::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DateTimeFormatter {
     locale: DateTimeLocale,
@@ -90,6 +118,7 @@ impl Default for DateTimeFormatter {
 }
 
 impl DateTimeFormatter {
+    /// Creates a formatter for the build locale ([`DATE_TIME_LOCALE`]) and UTC.
     pub const fn new() -> Self {
         DateTimeFormatter {
             locale: DATE_TIME_LOCALE,
@@ -97,10 +126,12 @@ impl DateTimeFormatter {
         }
     }
 
+    /// Uses the names and patterns of another locale.
     pub const fn with_locale(self, locale: DateTimeLocale) -> Self {
         DateTimeFormatter { locale, ..self }
     }
 
+    /// Shifts timestamps by a fixed UTC offset, in seconds, also printed by `%z`.
     pub const fn with_utc_offset(self, seconds: i32) -> Self {
         DateTimeFormatter {
             offset: seconds,
@@ -108,14 +139,17 @@ impl DateTimeFormatter {
         }
     }
 
+    /// Returns the names and patterns used by this formatter.
     pub const fn locale(&self) -> &DateTimeLocale {
         &self.locale
     }
 
+    /// Returns the UTC offset of this formatter, in seconds.
     pub const fn utc_offset(&self) -> i32 {
         self.offset
     }
 
+    /// Writes a Unix timestamp formatted with a pattern.
     pub fn write<W: Write>(
         &self,
         writer: &mut W,
@@ -136,6 +170,14 @@ impl DateTimeFormatter {
         self.write_pattern(writer, &fields, pattern, true)
     }
 
+    /// Returns a value implementing [`fmt::Display`], to format a timestamp with
+    /// `write!` or `format_args!` without allocation.
+    ///
+    /// ```
+    /// let formatter = embedded_i18n::DateTimeFormatter::new();
+    /// let text = format!("Updated {}", formatter.display(0, "%Y-%m-%d"));
+    /// assert_eq!(text, "Updated 1970-01-01");
+    /// ```
     pub const fn display<'a>(
         &'a self,
         unix_timestamp: i64,
@@ -148,6 +190,8 @@ impl DateTimeFormatter {
         }
     }
 
+    /// Formats a Unix timestamp into a `String`. Available with the `alloc`
+    /// feature.
     #[cfg(feature = "alloc")]
     pub fn format(&self, unix_timestamp: i64, pattern: &str) -> String {
         let mut output = String::with_capacity(pattern.len() + 16);
@@ -250,6 +294,7 @@ fn weekday(unix_timestamp: i64) -> u8 {
     (unix_timestamp.div_euclid(86_400) + 4).rem_euclid(7) as u8
 }
 
+/// Timestamp formatted on display, returned by [`DateTimeFormatter::display`].
 pub struct DateTimeDisplay<'a> {
     formatter: &'a DateTimeFormatter,
     unix_timestamp: i64,
@@ -262,6 +307,15 @@ impl fmt::Display for DateTimeDisplay<'_> {
     }
 }
 
+/// Writes a Unix timestamp formatted with a pattern, in the build locale and
+/// UTC. See [`DateTimeFormatter`] for the tokens.
+///
+/// ```
+/// let mut output = String::new();
+/// embedded_i18n::write_unix_timestamp(&mut output, 0, "%a %d %b %Y %H:%M")?;
+/// assert_eq!(output, "Thu 01 Jan 1970 00:00");
+/// # Ok::<(), core::fmt::Error>(())
+/// ```
 pub fn write_unix_timestamp<W: Write>(
     writer: &mut W,
     unix_timestamp: i64,
@@ -270,6 +324,8 @@ pub fn write_unix_timestamp<W: Write>(
     DateTimeFormatter::new().write(writer, unix_timestamp, pattern)
 }
 
+/// Formats a Unix timestamp into a `String`, in the build locale and UTC.
+/// Available with the `alloc` feature.
 #[cfg(feature = "alloc")]
 pub fn format_unix_timestamp(unix_timestamp: i64, pattern: &str) -> String {
     DateTimeFormatter::new().format(unix_timestamp, pattern)

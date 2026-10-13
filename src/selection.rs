@@ -42,6 +42,7 @@ const fn count(list: &'static str) -> usize {
     count
 }
 
+/// Number of embedded locales: the length of `EMBEDDED_I18N_LOCALES`, or 1.
 pub const LOCALE_COUNT: usize = match count(embedded_locales()) {
     0 => 1,
     count => count,
@@ -49,6 +50,8 @@ pub const LOCALE_COUNT: usize = match count(embedded_locales()) {
 
 const _: () = assert!(LOCALE_COUNT <= u8::MAX as usize);
 
+/// Embedded locales, in the order of `EMBEDDED_I18N_LOCALES`, or the build
+/// locale alone.
 pub const LOCALES: [&str; LOCALE_COUNT] = {
     let mut locales = [crate::get_locale(); LOCALE_COUNT];
     let mut index = 0;
@@ -87,6 +90,8 @@ const fn same_locale(left: &str, right: &str) -> bool {
     true
 }
 
+/// Returns the index in [`LOCALES`] of a locale, compared case-insensitively
+/// with `-` and `_` treated alike.
 pub const fn find_locale(locale: &str) -> Option<usize> {
     let mut index = 0;
     while index < LOCALE_COUNT {
@@ -98,6 +103,8 @@ pub const fn find_locale(locale: &str) -> Option<usize> {
     None
 }
 
+/// Index of the locale active at startup: `EMBEDDED_I18N_LOCALE` if embedded,
+/// otherwise the first embedded locale.
 pub const DEFAULT_LOCALE_INDEX: usize = match find_locale(crate::get_locale()) {
     Some(index) => index,
     None => 0,
@@ -105,6 +112,7 @@ pub const DEFAULT_LOCALE_INDEX: usize = match find_locale(crate::get_locale()) {
 
 static CURRENT: AtomicU8 = AtomicU8::new(DEFAULT_LOCALE_INDEX as u8);
 
+/// Error returned when selecting a locale that is not embedded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownLocale;
 
@@ -114,16 +122,23 @@ impl fmt::Display for UnknownLocale {
     }
 }
 
+/// Returns the index in [`LOCALES`] of the current locale.
 #[inline]
 pub fn locale_index() -> usize {
     let index = usize::from(CURRENT.load(Ordering::Relaxed));
     if index < LOCALE_COUNT { index } else { 0 }
 }
 
+/// Returns the current locale.
+///
+/// ```
+/// assert_eq!(embedded_i18n::locale(), "en");
+/// ```
 pub fn locale() -> &'static str {
     LOCALES[locale_index()]
 }
 
+/// Selects the current locale by its index in [`LOCALES`].
 pub fn set_locale_index(index: usize) -> Result<(), UnknownLocale> {
     if index >= LOCALE_COUNT {
         return Err(UnknownLocale);
@@ -132,6 +147,20 @@ pub fn set_locale_index(index: usize) -> Result<(), UnknownLocale> {
     Ok(())
 }
 
+/// Selects the current locale used by the translation macros.
+///
+/// With `EMBEDDED_I18N_LOCALES=en,fr,de`, every listed locale is embedded and
+/// the macros look up the current one at runtime. The current locale is stored
+/// in an atomic with plain loads and stores, so this works on targets without
+/// compare-and-swap and needs no allocation. Without `EMBEDDED_I18N_LOCALES`,
+/// only the build locale is accepted.
+///
+/// ```
+/// use embedded_i18n::{set_locale, UnknownLocale};
+///
+/// assert_eq!(set_locale("en"), Ok(()));
+/// assert_eq!(set_locale("tlh"), Err(UnknownLocale));
+/// ```
 pub fn set_locale(locale: &str) -> Result<(), UnknownLocale> {
     set_locale_index(find_locale(locale).ok_or(UnknownLocale)?)
 }

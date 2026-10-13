@@ -1,3 +1,9 @@
+//! Procedural macros of [embedded-i18n](https://docs.rs/embedded-i18n).
+//!
+//! This crate is an implementation detail and is not meant to be used
+//! directly: depend on `embedded-i18n`, which re-exports and documents the
+//! macros.
+
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
