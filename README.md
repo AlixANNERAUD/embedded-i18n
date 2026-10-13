@@ -17,10 +17,13 @@ embedded-i18n = "0.1"
 
 1. Place `locales/<locale>.json` or `locales/<locale>.po` files next to your `Cargo.toml`.
 2. Set `EMBEDDED_I18N_LOCALE` (and optionally `EMBEDDED_I18N_FALLBACK`) at build time.
-3. Use the `translate!()` macro, it resolves to a `&'static str` at compile time.
+3. Call `track_locales!()` once at the root of your crate so that editing a locale file triggers a rebuild.
+4. Use the `translate!()` macro, it resolves to a `&'static str` at compile time.
 
 ```rust
 use embedded_i18n::translate;
+
+embedded_i18n::track_locales!();
 
 let greeting = translate!("Hello, world!");
 ```
@@ -64,7 +67,17 @@ let s: &'static str = translate!("Hello");
 let c: &'static CStr = translate!(c"Hello");
 ```
 
-Panics at compile time if the key is not found in either the selected locale or the fallback locale.
+Fails to compile if the key is not found in either the selected locale or the fallback locale. The expansion is a plain literal, so it can be used in `const` items and as the format string of `format!` / `write!`.
+
+### `track_locales!()`
+
+Cargo does not know that `translate!()` reads the locale files, so editing them would not rebuild your crate. Invoke `track_locales!()` once, at module level, to make the crate depend on every locale file loaded for the build:
+
+```rust
+embedded_i18n::track_locales!();
+```
+
+It expands to `include_bytes!` of each file inside an unused constant, so it adds nothing to the binary. Changing `EMBEDDED_I18N_LOCALE` or `EMBEDDED_I18N_FALLBACK` always triggers a rebuild.
 
 ### Locale resolution
 

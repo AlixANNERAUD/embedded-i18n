@@ -14,10 +14,13 @@ mod json;
 #[cfg(feature = "backend-po")]
 mod po;
 
+type Translations = HashMap<String, String>;
+
 struct Catalog {
     path: PathBuf,
     locale: String,
     fallback: String,
+    files: Vec<PathBuf>,
     translations: HashMap<String, String>,
 }
 
@@ -39,8 +42,10 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
     }
 
     let mut translations = HashMap::new();
+    let mut files = Vec::new();
 
-    if let Some(entries) = load_locale(path, locale)? {
+    if let Some((file, entries)) = load_locale(path, locale)? {
+        files.push(file);
         for (key, value) in entries {
             if !value.is_empty() {
                 translations.insert(key, value);
@@ -48,7 +53,10 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
         }
     }
 
-    if let Some(entries) = load_locale(path, fallback)? {
+    if let Some((file, entries)) = load_locale(path, fallback)? {
+        if !files.contains(&file) {
+            files.push(file);
+        }
         for (key, value) in entries {
             translations.entry(key).or_insert(value);
         }
@@ -58,12 +66,13 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
         path: path.to_path_buf(),
         locale: locale.to_string(),
         fallback: fallback.to_string(),
+        files,
         translations,
     })
 }
 
 #[allow(unused_variables)]
-fn load_locale(path: &Path, locale: &str) -> Result<Option<HashMap<String, String>>, String> {
+fn load_locale(path: &Path, locale: &str) -> Result<Option<(PathBuf, Translations)>, String> {
     let locale = locale.to_lowercase();
 
     #[cfg(feature = "backend-json")]
@@ -71,7 +80,7 @@ fn load_locale(path: &Path, locale: &str) -> Result<Option<HashMap<String, Strin
         let file = path.join(format!("{}.{}", locale, json::EXTENSION));
         if file.exists() {
             return json::load(&file)
-                .map(Some)
+                .map(|entries| Some((file.clone(), entries)))
                 .map_err(|e| format!("{}: {}", file.display(), e));
         }
     }
@@ -81,7 +90,7 @@ fn load_locale(path: &Path, locale: &str) -> Result<Option<HashMap<String, Strin
         let file = path.join(format!("{}.{}", locale, po::EXTENSION));
         if file.exists() {
             return po::load(&file)
-                .map(Some)
+                .map(|entries| Some((file.clone(), entries)))
                 .map_err(|e| format!("{}: {}", file.display(), e));
         }
     }
@@ -182,6 +191,34 @@ fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result
     }
 }
 
+fn expand_track_locales(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    if !input.is_empty() {
+        return Err(syn::Error::new_spanned(input, "unexpected argument"));
+    }
+    let catalog = catalog
+        .as_ref()
+        .map_err(|error| syn::Error::new(Span::call_site(), error))?;
+    let files = catalog
+        .files
+        .iter()
+        .map(|file| file.to_string_lossy().into_owned());
+    Ok(quote! {
+        const _: () = {
+            #(const _: &[u8] = include_bytes!(#files);)*
+        };
+    })
+}
+
+#[proc_macro]
+pub fn track_locales(input: TokenStream) -> TokenStream {
+    expand_track_locales(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {
     expand(input.into(), &CATALOG)
@@ -198,6 +235,10 @@ mod tests {
             path: PathBuf::from("locales"),
             locale: "fr".to_string(),
             fallback: "en".to_string(),
+            files: vec![
+                PathBuf::from("/locales/fr.json"),
+                PathBuf::from("/locales/en.json"),
+            ],
             translations: entries
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -330,5 +371,46 @@ mod tests {
         assert_eq!(catalog.translations["greeting"], "Bonjour");
         assert_eq!(catalog.translations["empty"], "Empty");
         assert_eq!(catalog.translations["only"], "Only");
+    }
+
+    #[test]
+    fn track_locales_includes_loaded_files() {
+        let tokens = expand_track_locales(quote! {}, &catalog(&[])).unwrap();
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                const _: () = {
+                    const _: &[u8] = include_bytes!("/locales/fr.json");
+                    const _: &[u8] = include_bytes!("/locales/en.json");
+                };
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn track_locales_rejects_arguments() {
+        let error = expand_track_locales(quote! { "locales" }, &catalog(&[]))
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "unexpected argument");
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn catalog_lists_loaded_files_once() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("fr.json"), "{}").unwrap();
+        std::fs::write(directory.path().join("en.json"), "{}").unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
+        assert_eq!(
+            catalog.files,
+            vec![
+                directory.path().join("fr.json"),
+                directory.path().join("en.json")
+            ]
+        );
+        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        assert_eq!(catalog.files, vec![directory.path().join("en.json")]);
     }
 }
