@@ -157,6 +157,10 @@ Both backends can be enabled simultaneously, the first matching file wins (JSON 
 
 This crate is `#![no_std]`-compatible by default. The `translate!()` macro, unicode range helpers, and timestamp formatting all work without an allocator. The `alloc` crate is only required for `String`-returning helpers (`format_unix_timestamp`, `format_ranges`).
 
+## Minimum Supported Rust Version
+
+Rust 1.85 (edition 2024). Raising it is not considered a breaking change.
+
 ## License
 
 Licensed under the <a href="LICENSE">MIT License</a>.
