@@ -496,7 +496,7 @@ let length = merge_contiguous_ranges_in_place(&mut buffer);
 
 // Format for fontconfig-like syntax into any `core::fmt::Write`
 write_ranges(&mut output, &buffer[..length])?;
-// -> "32-126,12353-12438,12449-12538,19968-40958"
+// -> "32-126,12352-12543,19968-40959"
 ```
 
 With the `alloc` feature, `merge_contiguous_ranges(Vec<Range<u32>>) -> Vec<Range<u32>>`, `format_range` and `format_ranges` return owned values instead.
