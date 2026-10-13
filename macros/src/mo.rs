@@ -1,15 +1,18 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
+
+use crate::Translations;
+use crate::plural::Expression;
 
 pub const EXTENSIONS: &[&str] = &["mo"];
 
 const MAGIC: u32 = 0x950412de;
 
-pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
+pub fn load(path: &Path) -> Result<Translations, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
     parse(&bytes)
 }
 
-fn parse(bytes: &[u8]) -> Result<HashMap<String, String>, String> {
+fn parse(bytes: &[u8]) -> Result<Translations, String> {
     let word = |offset: usize, big_endian: bool| -> Result<u32, String> {
         let slice: [u8; 4] = bytes
             .get(offset..offset + 4)
@@ -45,21 +48,28 @@ fn parse(bytes: &[u8]) -> Result<HashMap<String, String>, String> {
         std::str::from_utf8(slice).map_err(|_| "MO parse error: string is not UTF-8".to_string())
     };
 
-    let mut translations = HashMap::new();
+    let mut translations = Translations::default();
 
     for index in 0..count {
         let original = string(originals, index)?;
+        let translation = string(translations_offset, index)?;
         if original.is_empty() {
+            translations.plural_rule = Expression::from_header(translation)
+                .map_err(|e| format!("MO parse error: {}", e))?;
             continue;
         }
-        let key = original.split('\0').next().unwrap_or_default();
-        let value = string(translations_offset, index)?
-            .split('\0')
-            .next()
-            .unwrap_or_default();
-        if !value.is_empty() {
-            translations.insert(key.to_string(), value.to_string());
+        let mut originals = original.split('\0');
+        let key = originals.next().unwrap_or_default();
+        let forms: Vec<String> = translation.split('\0').map(str::to_string).collect();
+        if forms.iter().any(String::is_empty) {
+            continue;
         }
+        if originals.next().is_some() {
+            translations.plurals.insert(key.to_string(), forms.clone());
+        }
+        translations
+            .messages
+            .insert(key.to_string(), forms[0].clone());
     }
 
     Ok(translations)
@@ -112,15 +122,17 @@ mod tests {
             false,
         );
         let translations = parse(&bytes).unwrap();
-        assert_eq!(translations.len(), 2);
-        assert_eq!(translations["Hello"], "Bonjour");
-        assert_eq!(translations["file"], "fichier");
+        assert_eq!(translations.messages.len(), 2);
+        assert_eq!(translations.messages["Hello"], "Bonjour");
+        assert_eq!(translations.messages["file"], "fichier");
+        assert_eq!(translations.plurals["file"], ["fichier", "fichiers"]);
+        assert!(translations.plural_rule.is_none());
     }
 
     #[test]
     fn parses_big_endian() {
         let bytes = build(&[("Hello", "Hallo")], true);
-        assert_eq!(parse(&bytes).unwrap()["Hello"], "Hallo");
+        assert_eq!(parse(&bytes).unwrap().messages["Hello"], "Hallo");
     }
 
     #[test]
@@ -136,5 +148,17 @@ mod tests {
         let bytes = build(&[("Hello", "Bonjour")], false);
         assert!(parse(&bytes[..bytes.len() - 10]).is_err());
         assert!(parse(&bytes[..10]).is_err());
+    }
+
+    #[test]
+    fn reads_plural_forms_header() {
+        let bytes = build(
+            &[(
+                "",
+                "Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n==2 ? 1 : 2);\n",
+            )],
+            false,
+        );
+        assert_eq!(parse(&bytes).unwrap().plural_rule.unwrap().evaluate(5), 2);
     }
 }

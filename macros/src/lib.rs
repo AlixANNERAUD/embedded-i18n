@@ -9,6 +9,8 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Lit, LitCStr, LitStr};
 
+use plural::{Category, Expression};
+
 #[cfg(feature = "backend-fluent")]
 mod fluent;
 #[cfg(feature = "backend-json")]
@@ -16,6 +18,11 @@ mod json;
 mod locale;
 #[cfg(feature = "backend-mo")]
 mod mo;
+#[cfg_attr(
+    not(any(feature = "backend-po", feature = "backend-mo")),
+    allow(dead_code)
+)]
+mod plural;
 #[cfg(feature = "backend-po")]
 mod po;
 #[cfg(feature = "backend-toml")]
@@ -31,27 +38,61 @@ mod yaml;
 
 pub(crate) const CONTEXT_SEPARATOR: char = '\u{4}';
 
-type Translations = HashMap<String, String>;
+#[derive(Default)]
+pub(crate) struct Translations {
+    pub messages: HashMap<String, String>,
+    pub plurals: HashMap<String, Vec<String>>,
+    pub plural_rule: Option<plural::Expression>,
+}
+
+impl From<HashMap<String, String>> for Translations {
+    fn from(messages: HashMap<String, String>) -> Self {
+        Translations {
+            messages,
+            ..Translations::default()
+        }
+    }
+}
 
 type Loader = fn(&Path) -> Result<Translations, String>;
 
 const BACKENDS: &[(&[&str], Loader)] = &[
     #[cfg(feature = "backend-json")]
-    (json::EXTENSIONS, json::load),
+    (json::EXTENSIONS, |path| {
+        json::load(path).map(Translations::from)
+    }),
     #[cfg(feature = "backend-yaml")]
-    (yaml::EXTENSIONS, yaml::load),
+    (yaml::EXTENSIONS, |path| {
+        yaml::load(path).map(Translations::from)
+    }),
     #[cfg(feature = "backend-toml")]
-    (toml::EXTENSIONS, toml::load),
+    (toml::EXTENSIONS, |path| {
+        toml::load(path).map(Translations::from)
+    }),
     #[cfg(feature = "backend-po")]
     (po::EXTENSIONS, po::load),
     #[cfg(feature = "backend-mo")]
     (mo::EXTENSIONS, mo::load),
     #[cfg(feature = "backend-fluent")]
-    (fluent::EXTENSIONS, fluent::load),
+    (fluent::EXTENSIONS, |path| {
+        fluent::load(path).map(Translations::from)
+    }),
 ];
 
 struct Locale {
+    name: String,
     translations: Translations,
+}
+
+enum Plural<'a> {
+    Categories {
+        locale: &'a str,
+        forms: Vec<(Category, &'a str)>,
+    },
+    Indexed {
+        rule: Option<&'a Expression>,
+        forms: &'a [String],
+    },
 }
 
 struct Catalog {
@@ -67,11 +108,40 @@ impl Catalog {
             .or_else(|| self.find(keys, |_| true))
     }
 
+    fn plural(&self, keys: &[String]) -> Option<Plural<'_>> {
+        self.locales.iter().find_map(|locale| {
+            keys.iter().find_map(|key| {
+                if let Some(forms) = locale.translations.plurals.get(key) {
+                    return Some(Plural::Indexed {
+                        rule: locale.translations.plural_rule.as_ref(),
+                        forms,
+                    });
+                }
+                let forms: Vec<(Category, &str)> = Category::ALL
+                    .iter()
+                    .filter_map(|category| {
+                        locale
+                            .translations
+                            .messages
+                            .get(&format!("{}.{}", key, category.name()))
+                            .filter(|value| !value.is_empty())
+                            .map(|value| (*category, value.as_str()))
+                    })
+                    .collect();
+                (!forms.is_empty()).then_some(Plural::Categories {
+                    locale: &locale.name,
+                    forms,
+                })
+            })
+        })
+    }
+
     fn find(&self, keys: &[String], accept: impl Fn(&str) -> bool) -> Option<&str> {
         self.locales.iter().find_map(|locale| {
             keys.iter().find_map(|key| {
                 locale
                     .translations
+                    .messages
                     .get(key)
                     .map(String::as_str)
                     .filter(|value| accept(value))
@@ -112,7 +182,10 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
         if let Some((file, translations)) = load_locale(path, locale)? {
             if !files.contains(&file) {
                 files.push(file);
-                locales.push(Locale { translations });
+                locales.push(Locale {
+                    name: locale.clone(),
+                    translations,
+                });
             }
         }
     }
@@ -258,17 +331,17 @@ fn translation(message: &Message, catalog: &Result<Catalog, String>) -> syn::Res
             format!(
                 "translation for {} not found in locales {} ({})",
                 message.describe(&name),
-                catalog
-                    .chain
-                    .iter()
-                    .map(|locale| format!("{:?}", locale))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                locales_list(catalog),
                 catalog.path.display()
             ),
         )
     })?;
 
+    literal(key, value, &name)
+}
+
+fn literal(key: &Key, value: &str, name: &str) -> syn::Result<TokenStream2> {
+    let span = key.span();
     match key {
         Key::Str(_) => {
             let value = LitStr::new(value, span);
@@ -285,6 +358,207 @@ fn translation(message: &Message, catalog: &Result<Catalog, String>) -> syn::Res
             Ok(quote! { #value })
         }
     }
+}
+
+fn locales_list(catalog: &Catalog) -> String {
+    catalog
+        .chain
+        .iter()
+        .map(|locale| format!("{:?}", locale))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn plural_selection(
+    message: &Message,
+    catalog: &Result<Catalog, String>,
+    arm: impl Fn(TokenStream2) -> TokenStream2,
+) -> syn::Result<TokenStream2> {
+    let key = &message.key;
+    let span = key.span();
+    let catalog = catalog
+        .as_ref()
+        .map_err(|error| syn::Error::new(span, error))?;
+    let name = key.value()?;
+    let n = proc_macro2::Ident::new("n", Span::mixed_site());
+
+    let plural = catalog.plural(&message.keys(&name)).ok_or_else(|| {
+        syn::Error::new(
+            span,
+            format!(
+                "plural translation for {} not found in locales {} ({})",
+                message.describe(&name),
+                locales_list(catalog),
+                catalog.path.display()
+            ),
+        )
+    })?;
+
+    match plural {
+        Plural::Indexed { rule, forms } => {
+            let germanic = Expression::germanic();
+            let index = rule.unwrap_or(&germanic).tokens(&n);
+            let arms = forms
+                .iter()
+                .map(|form| literal(key, form, &name).map(&arm))
+                .collect::<syn::Result<Vec<_>>>()?;
+            let first = &arms[0];
+            let indexes = (0..arms.len() as u64).collect::<Vec<_>>();
+            Ok(quote! {
+                match #index {
+                    #(#indexes => #arms,)*
+                    _ => #first,
+                }
+            })
+        }
+        Plural::Categories { locale, forms } => {
+            let rules = plural::rules(locale).ok_or_else(|| {
+                syn::Error::new(
+                    span,
+                    format!(
+                        "no plural rules for locale {:?}, use a gettext PO or MO file with a Plural-Forms header",
+                        locale
+                    ),
+                )
+            })?;
+            let form = |category: Category| {
+                forms
+                    .iter()
+                    .find(|(candidate, _)| *candidate == category)
+                    .map(|(_, value)| *value)
+            };
+            let missing: Vec<&str> = rules
+                .required()
+                .filter(|category| form(*category).is_none())
+                .map(Category::name)
+                .collect();
+            if !missing.is_empty() {
+                return Err(syn::Error::new(
+                    span,
+                    format!(
+                        "plural translation for {} in locale {:?} is missing the {} form{}",
+                        message.describe(&name),
+                        locale,
+                        missing.join(", "),
+                        if missing.len() > 1 { "s" } else { "" }
+                    ),
+                ));
+            }
+            let mut branches = Vec::new();
+            if let Some(zero) = form(Category::Zero) {
+                if !rules
+                    .categories
+                    .iter()
+                    .any(|(category, _)| *category == Category::Zero)
+                {
+                    branches.push((quote! { #n == 0 }, zero));
+                }
+            }
+            for (category, condition) in rules.categories {
+                if let Some(value) = form(*category) {
+                    branches.push((condition.tokens(&n), value));
+                }
+            }
+            let other = arm(literal(
+                key,
+                form(Category::Other).unwrap_or_default(),
+                &name,
+            )?);
+            let conditions = branches.iter().map(|(condition, _)| condition);
+            let values = branches
+                .iter()
+                .map(|(_, value)| literal(key, value, &name).map(&arm))
+                .collect::<syn::Result<Vec<_>>>()?;
+            Ok(quote! {
+                #(if #conditions { #values } else)* { #other }
+            })
+        }
+    }
+}
+
+struct PluralInput {
+    message: Message,
+    count: syn::Expr,
+}
+
+impl Parse for PluralInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let message = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let count = input.parse()?;
+        if input.peek(syn::Token![,]) {
+            input.parse::<syn::Token![,]>()?;
+        }
+        if !input.is_empty() {
+            return Err(input.error("unexpected argument"));
+        }
+        Ok(PluralInput { message, count })
+    }
+}
+
+struct PluralWriteInput {
+    writer: syn::Expr,
+    message: Message,
+    count: syn::Expr,
+    arguments: TokenStream2,
+}
+
+impl Parse for PluralWriteInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let writer = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let message: Message = input.parse()?;
+        if let Key::CStr(literal) = &message.key {
+            return Err(syn::Error::new(
+                literal.span(),
+                "expected a string literal, C strings cannot be used as format strings",
+            ));
+        }
+        input.parse::<syn::Token![,]>()?;
+        let count = input.parse()?;
+        if !input.is_empty() {
+            input.parse::<syn::Token![,]>()?;
+        }
+        Ok(PluralWriteInput {
+            writer,
+            message,
+            count,
+            arguments: input.parse()?,
+        })
+    }
+}
+
+fn plural_block(count: &syn::Expr, selection: TokenStream2) -> TokenStream2 {
+    let n = proc_macro2::Ident::new("n", Span::mixed_site());
+    quote! {
+        {
+            let count = #count;
+            let #n: u64 = (count as i64).unsigned_abs();
+            #selection
+        }
+    }
+}
+
+fn expand_plural(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    let input: PluralInput = syn::parse2(input)?;
+    let selection = plural_selection(&input.message, catalog, |literal| literal)?;
+    Ok(plural_block(&input.count, selection))
+}
+
+fn expand_plural_write(
+    input: TokenStream2,
+    catalog: &Result<Catalog, String>,
+) -> syn::Result<TokenStream2> {
+    let input: PluralWriteInput = syn::parse2(input)?;
+    let writer = &input.writer;
+    let arguments = &input.arguments;
+    let selection = plural_selection(&input.message, catalog, |literal| {
+        quote! { ::core::write!(#writer, #literal, #arguments) }
+    })?;
+    Ok(plural_block(&input.count, selection))
 }
 
 fn expand(input: TokenStream2, catalog: &Result<Catalog, String>) -> syn::Result<TokenStream2> {
@@ -389,6 +663,20 @@ pub fn translate(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
+pub fn translate_plural(input: TokenStream) -> TokenStream {
+    expand_plural(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro]
+pub fn translate_plural_write(input: TokenStream) -> TokenStream {
+    expand_plural_write(input.into(), &CATALOG)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro]
 pub fn translate_args(input: TokenStream) -> TokenStream {
     expand_args(input.into(), &CATALOG)
         .unwrap_or_else(syn::Error::into_compile_error)
@@ -415,10 +703,13 @@ mod tests {
                 PathBuf::from("/locales/en.json"),
             ],
             locales: vec![Locale {
-                translations: entries
-                    .iter()
-                    .map(|(key, value)| (key.to_string(), value.to_string()))
-                    .collect(),
+                name: "fr".to_string(),
+                translations: Translations::from(
+                    entries
+                        .iter()
+                        .map(|(key, value)| (key.to_string(), value.to_string()))
+                        .collect::<HashMap<_, _>>(),
+                ),
             }],
         })
     }
@@ -880,14 +1171,182 @@ mod tests {
             files: Vec::new(),
             locales: vec![
                 Locale {
-                    translations: [("menu.Open".to_string(), "Ouvrir".to_string())].into(),
+                    name: "fr".to_string(),
+                    translations: Translations::from(HashMap::from([(
+                        "menu.Open".to_string(),
+                        "Ouvrir".to_string(),
+                    )])),
                 },
                 Locale {
-                    translations: [("menu\u{4}Open".to_string(), "Open".to_string())].into(),
+                    name: "en".to_string(),
+                    translations: Translations::from(HashMap::from([(
+                        "menu\u{4}Open".to_string(),
+                        "Open".to_string(),
+                    )])),
                 },
             ],
         });
         let tokens = expand(quote! { context = "menu", "Open" }, &catalog).unwrap();
         assert_eq!(tokens.to_string(), quote! { "Ouvrir" }.to_string());
+    }
+
+    fn locale_catalog(name: &str, translations: Translations) -> Result<Catalog, String> {
+        Ok(Catalog {
+            path: PathBuf::from("locales"),
+            chain: vec![name.to_string()],
+            files: Vec::new(),
+            locales: vec![Locale {
+                name: name.to_string(),
+                translations,
+            }],
+        })
+    }
+
+    fn messages(entries: &[(&str, &str)]) -> Translations {
+        Translations::from(
+            entries
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn plural_uses_cldr_categories() {
+        let catalog = locale_catalog(
+            "fr",
+            messages(&[("files.one", "fichier"), ("files.other", "fichiers")]),
+        );
+        let tokens = expand_plural(quote! { "files", total }, &catalog)
+            .unwrap()
+            .to_string();
+        assert!(tokens.contains("let count = total"));
+        assert!(tokens.contains("\"fichier\""));
+        assert!(tokens.contains("\"fichiers\""));
+        assert!(!tokens.contains("1_000_000"));
+    }
+
+    #[test]
+    fn plural_reports_missing_categories() {
+        let catalog = locale_catalog(
+            "ru",
+            messages(&[("files.one", "файл"), ("files.other", "файла")]),
+        );
+        assert_eq!(
+            expand_plural(quote! { "files", 2 }, &catalog)
+                .err()
+                .unwrap()
+                .to_string(),
+            "plural translation for \"files\" in locale \"ru\" is missing the few, many forms"
+        );
+    }
+
+    #[test]
+    fn plural_requires_known_language() {
+        let catalog = locale_catalog("tlh", messages(&[("files.other", "files")]));
+        assert!(
+            expand_plural(quote! { "files", 2 }, &catalog)
+                .err()
+                .unwrap()
+                .to_string()
+                .starts_with("no plural rules for locale \"tlh\"")
+        );
+    }
+
+    #[test]
+    fn plural_uses_gettext_forms_and_rule() {
+        let mut translations = messages(&[]);
+        translations.plurals.insert(
+            "files".to_string(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        );
+        translations.plural_rule = Some(Expression::parse("n == 1 ? 0 : n == 2 ? 1 : 2").unwrap());
+        let tokens = expand_plural(quote! { "files", 3 }, &locale_catalog("xx", translations))
+            .unwrap()
+            .to_string();
+        assert!(tokens.contains("match"));
+        assert!(tokens.contains("0u64 => \"a\""));
+        assert!(tokens.contains("2u64 => \"c\""));
+        assert!(tokens.contains("_ => \"a\""));
+    }
+
+    #[test]
+    fn plural_without_rule_uses_germanic_default() {
+        let mut translations = messages(&[]);
+        translations
+            .plurals
+            .insert("files".to_string(), vec!["a".to_string(), "b".to_string()]);
+        let tokens = expand_plural(quote! { "files", 3 }, &locale_catalog("xx", translations))
+            .unwrap()
+            .to_string();
+        assert!(tokens.contains("!= (1u64)"));
+    }
+
+    #[test]
+    fn plural_reports_missing_message() {
+        assert_eq!(
+            expand_plural(quote! { "files", 2 }, &catalog(&[]))
+                .err()
+                .unwrap()
+                .to_string(),
+            "plural translation for \"files\" not found in locales \"fr\", \"en\" (locales)"
+        );
+    }
+
+    #[test]
+    fn plural_requires_count() {
+        assert!(expand_plural(quote! { "files" }, &catalog(&[])).is_err());
+        assert!(expand_plural(quote! { "files", 1, 2 }, &catalog(&[])).is_err());
+    }
+
+    #[test]
+    fn plural_write_wraps_each_form() {
+        let catalog = locale_catalog(
+            "en",
+            messages(&[
+                ("files.one", "{count} file"),
+                ("files.other", "{count} files"),
+            ]),
+        );
+        let tokens = expand_plural_write(quote! { output, "files", total, extra = 1 }, &catalog)
+            .unwrap()
+            .to_string();
+        assert!(
+            tokens.contains(
+                &quote! { ::core::write!(output, "{count} file", extra = 1) }.to_string()
+            )
+        );
+        assert!(
+            tokens.contains(
+                &quote! { ::core::write!(output, "{count} files", extra = 1) }.to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn plural_write_rejects_c_string() {
+        assert!(
+            expand_plural_write(quote! { output, c"files", 1 }, &catalog(&[]))
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("C strings cannot be used as format strings")
+        );
+    }
+
+    #[test]
+    fn plural_zero_form_overrides_when_language_has_none() {
+        let catalog = locale_catalog(
+            "en",
+            messages(&[
+                ("files.zero", "none"),
+                ("files.one", "one"),
+                ("files.other", "other"),
+            ]),
+        );
+        let tokens = expand_plural(quote! { "files", 0 }, &catalog)
+            .unwrap()
+            .to_string();
+        assert!(tokens.contains("== 0 { \"none\" }"));
     }
 }

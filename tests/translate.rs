@@ -158,3 +158,65 @@ fn translate_write_with_context() {
     embedded_i18n::translate_write!(&mut buffer, context = "state", "Open").unwrap();
     assert_eq!(&buffer.bytes[..buffer.length], b"Open (state)");
 }
+
+#[test]
+fn translate_plural_selects_form() {
+    assert_eq!(embedded_i18n::translate_plural!("files", 1), "{count} file");
+    assert_eq!(
+        embedded_i18n::translate_plural!("files", 0usize),
+        "{count} files"
+    );
+    assert_eq!(
+        embedded_i18n::translate_plural!("files", 2u8),
+        "{count} files"
+    );
+    assert_eq!(
+        embedded_i18n::translate_plural!("files", -1i32),
+        "{count} file"
+    );
+}
+
+#[test]
+fn translate_plural_in_const() {
+    const ONE: &str = embedded_i18n::translate_plural!("files", 1);
+    assert_eq!(ONE, "{count} file");
+}
+
+#[test]
+fn translate_plural_with_context_and_c_string() {
+    assert_eq!(
+        embedded_i18n::translate_plural!(context = "menu", "files", 1),
+        "Open file"
+    );
+    assert_eq!(
+        embedded_i18n::translate_plural!(context = "menu", c"files", 3).to_bytes(),
+        b"Open files"
+    );
+}
+
+#[test]
+fn translate_plural_write_captures_count() {
+    let mut buffer = Buffer {
+        bytes: [0; 64],
+        length: 0,
+    };
+    let files = 3;
+    embedded_i18n::translate_plural_write!(&mut buffer, "files", files).unwrap();
+    assert_eq!(&buffer.bytes[..buffer.length], b"3 files");
+    buffer.length = 0;
+    embedded_i18n::translate_plural_write!(&mut buffer, "files", 1).unwrap();
+    assert_eq!(&buffer.bytes[..buffer.length], b"1 file");
+}
+
+#[cfg(feature = "backend-json")]
+#[test]
+fn translate_plural_zero_override() {
+    assert_eq!(
+        embedded_i18n::translate_plural!("files_with_zero", 0),
+        "No files"
+    );
+    assert_eq!(
+        embedded_i18n::translate_plural!("files_with_zero", 1),
+        "{count} file"
+    );
+}
