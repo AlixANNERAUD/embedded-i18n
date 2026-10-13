@@ -2,33 +2,121 @@
 
 [![crates.io](https://img.shields.io/crates/v/embedded-i18n.svg)](https://crates.io/crates/embedded-i18n)
 [![docs.rs](https://img.shields.io/docsrs/embedded-i18n)](https://docs.rs/embedded-i18n)
+[![CI](https://github.com/AlixANNERAUD/embedded-i18n/actions/workflows/check.yml/badge.svg)](https://github.com/AlixANNERAUD/embedded-i18n/actions/workflows/check.yml)
 [![codecov](https://codecov.io/github/AlixANNERAUD/embedded-i18n/graph/badge.svg?token=0C27GIS0BK)](https://codecov.io/github/AlixANNERAUD/embedded-i18n)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![MSRV 1.85](https://img.shields.io/badge/MSRV-1.85-orange.svg)](#minimum-supported-rust-version)
+[![no_std](https://img.shields.io/badge/no__std-no%20alloc-success.svg)](#no_std-support)
 
-Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON, YAML, TOML, GNU gettext PO/MO or Fluent locale files and embeds them directly into ROM, no runtime loading, no allocator required for translations.
+**Compile-time internationalization (i18n) and localization (l10n) for embedded Rust, `no_std` firmware and microcontrollers.**
 
-## Installation
-
-```toml
-[dependencies]
-embedded-i18n = "0.1"
-```
-
-## Quick Start
-
-1. Place `locales/<locale>.json` or `locales/<locale>.po` files next to your `Cargo.toml`.
-2. Set `EMBEDDED_I18N_LOCALE` (and optionally `EMBEDDED_I18N_FALLBACK`) at build time.
-3. Call `track_locales!()` once at the root of your crate so that editing a locale file triggers a rebuild.
-4. Use the `translate!()` macro, it resolves to a `&'static str` at compile time.
+`embedded-i18n` translates your strings **at build time**: translations from JSON, YAML, TOML, GNU gettext PO/MO or Fluent files are compiled into your binary as plain `&'static str` literals stored in flash/ROM. No runtime parser, no allocator, no file system, no heap, and a missing translation is a **compile error**, not a blank screen on a device in the field.
 
 ```rust
-use embedded_i18n::translate;
+use embedded_i18n::{translate, translate_plural_write};
 
-embedded_i18n::track_locales!();
+const TITLE: &str = translate!("Settings");        // EMBEDDED_I18N_LOCALE=fr -> "Paramètres"
 
-let greeting = translate!("Hello, world!");
+translate_plural_write!(&mut display, "files", count)?; // "1 fichier", "3 fichiers"
 ```
 
-### Locale files - JSON
+## Why embedded-i18n?
+
+- **Zero runtime cost.** Each `translate!()` expands to a string literal. Your firmware only contains the strings it uses, in the language you build for.
+- **Fits on a microcontroller.** `#![no_std]`, no allocator, no `std::fs`, no `libc`. Builds for bare-metal targets such as `thumbv7em-none-eabihf` and `thumbv6m-none-eabi` (no atomic compare-and-swap).
+- **Mistakes caught by the compiler.** Missing keys, missing plural forms, invalid locale files and format placeholders that do not match their arguments are reported as compile errors at the call site. An optional strict mode forbids falling back to another language.
+- **Real-world linguistics.** CLDR plural rules for 40 languages, gettext `Plural-Forms`, message context (`msgctxt`), select variants (gender, enums), locale fallback chains (`fr-CA` → `fr` → `en`), right-to-left bidi isolation and localized dates without `libc`.
+- **Use the files translators already know.** JSON (nested keys), YAML, TOML, GNU gettext `.po` / `.mo`, and Fluent `.ftl`, all parsed at compile time, so the formats add no code to the firmware.
+- **Runtime language switching when you need it.** Embed several locales and switch with `set_locale("de")`, still without allocation.
+
+## Comparison
+
+| | **embedded-i18n** | [rust-i18n](https://crates.io/crates/rust-i18n) | [Fluent](https://crates.io/crates/fluent) | [gettext-rs](https://crates.io/crates/gettext-rs) |
+| --- | --- | --- | --- | --- |
+| `no_std`, no allocator | ✅ | ❌ | ❌ | ❌ |
+| Translations resolved | At compile time, as literals | Compile-time embedded, looked up at runtime | Parsed and resolved at runtime | Loaded from `.mo` files at runtime |
+| Missing translation | Compile error | Runtime fallback | Runtime error / fallback | Runtime fallback to the source string |
+| Format placeholders checked at compile time | ✅ (`format_args!`) | ❌ | ❌ | ❌ |
+| Plural forms | ✅ CLDR rules and gettext `Plural-Forms` | Not built in | ✅ | ✅ |
+| Message context / select variants | ✅ / ✅ | ❌ / ❌ | Message ids / ✅ | ✅ / ❌ |
+| Runtime locale switching | Optional (`EMBEDDED_I18N_LOCALES`) | ✅ | ✅ | ✅ |
+| File formats | JSON, YAML, TOML, PO, MO, Fluent (subset) | YAML, JSON, TOML | Fluent | MO (via GNU gettext) |
+| Localized dates without `libc` | ✅ | ❌ | ❌ | ❌ |
+
+Pick `embedded-i18n` when the binary must be small, deterministic and allocation-free, and the set of languages is known at build time. On desktop or server applications with downloadable language packs and full Fluent features (functions, parameterized terms), a runtime library is a better fit.
+
+## Quick start (60 seconds)
+
+1. Add the crate:
+
+   ```toml
+   [dependencies]
+   embedded-i18n = "0.1"
+   ```
+
+2. Create `locales/fr.json` next to your `Cargo.toml`, and a `locales/en.json` with the same keys in English (the default fallback):
+
+   ```json
+   {
+     "Settings": "Paramètres",
+     "Hello {name}!": "Bonjour {name} !",
+     "files": { "one": "{count} fichier", "other": "{count} fichiers" }
+   }
+   ```
+
+3. Translate:
+
+   ```rust
+   use core::fmt::Write;
+   use embedded_i18n::{translate, translate_plural_write, translate_write};
+
+   embedded_i18n::track_locales!();
+
+   fn render(display: &mut impl Write, name: &str, count: usize) -> core::fmt::Result {
+       display.write_str(translate!("Settings"))?;
+       translate_write!(display, "Hello {name}!")?;
+       translate_plural_write!(display, "files", count)
+   }
+   ```
+
+4. Build for a language:
+
+   ```sh
+   EMBEDDED_I18N_LOCALE=fr cargo build --release
+   ```
+
+   Set it once in `.cargo/config.toml` (`[env] EMBEDDED_I18N_LOCALE = "fr"`) to avoid repeating it.
+
+## Table of contents
+
+- [Locale files](#locale-files)
+- [Translating](#translating)
+  - [`translate!()`](#translate)
+  - [Message context](#message-context)
+  - [Plural forms](#plural-forms)
+  - [Select variants](#select-variants)
+  - [Formatting with arguments](#formatting-with-arguments)
+  - [Rebuilding when locale files change](#rebuilding-when-locale-files-change)
+- [Configuration](#configuration)
+  - [Locale resolution](#locale-resolution)
+  - [Runtime locale selection](#runtime-locale-selection)
+  - [Translation coverage](#translation-coverage)
+  - [Right-to-left languages](#right-to-left-languages)
+  - [Pseudo-localization](#pseudo-localization)
+- [Runtime helpers](#runtime-helpers)
+  - [Localized date and time formatting](#localized-date-and-time-formatting)
+  - [Unicode ranges for font subsetting](#unicode-ranges-for-font-subsetting)
+- [Cargo features](#cargo-features)
+- [`no_std` support](#no_std-support)
+- [Minimum Supported Rust Version](#minimum-supported-rust-version)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Locale files
+
+Locale files live in `locales/` next to the `Cargo.toml` of the crate calling the macros (see [`EMBEDDED_I18N_PATH`](#locale-resolution)), one file per locale: `en.json`, `fr-CA.po`, `de.yaml`... Keys can be source strings (gettext style) or identifiers (`menu.settings.title`).
+
+### JSON
 
 ```json
 {
@@ -44,7 +132,7 @@ let greeting = translate!("Hello, world!");
 
 Nested objects are flattened to dotted keys: `translate!("menu.settings.title")`. Values must be strings or objects, and a key defined twice (e.g. `"menu.settings.title"` and the nested form) is a compile error.
 
-### Locale files - YAML and TOML
+### YAML and TOML
 
 ```yaml
 greeting: Bonjour
@@ -62,7 +150,7 @@ title = "Paramètres"
 
 Nesting works like JSON. YAML files can use the `.yaml` or `.yml` extension.
 
-### Locale files - GNU gettext PO
+### GNU gettext PO and MO
 
 ```po
 msgid "Hello, world!"
@@ -76,7 +164,7 @@ Like `msgfmt`, entries flagged `#, fuzzy` and entries with an empty `msgstr` are
 
 Compiled gettext catalogs (`.mo`, little or big endian) are supported by the `backend-mo` feature.
 
-### Locale files - Fluent
+### Fluent
 
 ```ftl
 -brand = Acme
@@ -88,27 +176,22 @@ login = Log in
 
 Simple Fluent messages are supported: text, message and term references, string and number literals, and attributes (as `login.placeholder`). Variables become named format placeholders (`{ $user-name }` → `{user_name}`) for `translate_args!()` and `translate_write!()`. A select expression making up a whole message becomes one key per variant (`emails.one`, `emails.other`) and the default variant is also available as `emails`, which is how plural forms are written in Fluent. Select expressions mixed with text, functions and parameterized terms are reported as compile errors.
 
-### Build configuration
-
-```sh
-EMBEDDED_I18N_LOCALE=fr EMBEDDED_I18N_FALLBACK=en cargo build
-```
-
-## API Reference
+## Translating
 
 ### `translate!()`
 
-The core macro. Replaces a string literal with its translation at compile time.
+The core macro. Replaces a message key with its translation at compile time.
 
 ```rust
-// Basic string
-let s: &'static str = translate!("Hello");
+use core::ffi::CStr;
+use embedded_i18n::translate;
 
-// C string (for FFI)
-let c: &'static CStr = translate!(c"Hello");
+const TITLE: &str = translate!("Settings");
+
+let c: &'static CStr = translate!(c"Settings");
 ```
 
-Fails to compile if the key is not found in either the selected locale or the fallback locale. The expansion is a plain literal, so it can be used in `const` items and as the format string of `format!` / `write!`.
+A key missing from every locale of the chain fails to compile, pointing at the call site. The expansion is a plain literal, so it can be used in `const` items and as the format string of `format!` / `write!`.
 
 ### Message context
 
@@ -207,7 +290,7 @@ Variants are nested keys, and an `other` variant is required: it is used for any
 
 In PO files the variants are flat keys (`msgid "replied.male"`), and in Fluent a select expression making up the whole message (`{ $gender -> [male] ... *[other] ... }`). All variants come from the first locale of the chain defining an `other` variant for the message. Like the other macros, both accept a `context`, and `translate_select_write!()` takes extra format arguments after the value.
 
-### `translate_args!()` and `translate_write!()`
+### Formatting with arguments
 
 Format a translation with arguments without allocating. The translated string becomes the format string, so placeholders are checked against the arguments at compile time:
 
@@ -228,7 +311,7 @@ log::info!("{}", translate_args!("inbox", name = name, count = 3));
 - Positional (`{}`), named (`{name}` with `name = value`) and implicitly captured variables (`{name}` with a `name` binding in scope) are supported.
 - With an allocator, `format!(translate!(key), args...)` works too, but only with explicit arguments.
 
-### `track_locales!()`
+### Rebuilding when locale files change
 
 Cargo does not know that `translate!()` reads the locale files, so editing them would not rebuild your crate. Invoke `track_locales!()` once, at module level, to make the crate depend on every locale file loaded for the build:
 
@@ -237,6 +320,16 @@ embedded_i18n::track_locales!();
 ```
 
 It expands to `include_bytes!` of each file inside an unused constant, so it adds nothing to the binary. Changing `EMBEDDED_I18N_LOCALE` or `EMBEDDED_I18N_FALLBACK` always triggers a rebuild.
+
+## Configuration
+
+Everything is configured with environment variables read at compile time. Set them on the command line or, to share them with your team and CI, in `.cargo/config.toml`:
+
+```toml
+[env]
+EMBEDDED_I18N_LOCALE = "fr"
+EMBEDDED_I18N_FALLBACK = "en"
+```
 
 ### Locale resolution
 
@@ -337,30 +430,7 @@ Hello {name}  →  [Hélló {name} ~~]
 
 Letters are accented with Latin-1 characters, the text is padded by about a third with `~` and wrapped in brackets, so clipped text is easy to spot. Placeholders and `{{` / `}}` escapes are preserved, so `translate_args!()`, `translate_write!()` and the plural and select macros keep working. Strict mode accepts every message of the pseudo-locale.
 
-### Unicode range helpers
-
-Map locales to Unicode code-point ranges for font subsetting:
-
-```rust
-use embedded_i18n::{get_locale_ranges, merge_contiguous_ranges_in_place, write_ranges};
-
-// Get ranges for a locale
-let ranges = get_locale_ranges("ja").unwrap();
-// -> [Basic Latin, Hiragana, Katakana, CJK Unified Ideographs]
-
-// Sort and merge overlapping/adjacent ranges, without allocation
-let mut buffer = [0..0, 0..0, 0..0, 0..0];
-buffer.clone_from_slice(ranges);
-let length = merge_contiguous_ranges_in_place(&mut buffer);
-
-// Format for fontconfig-like syntax into any `core::fmt::Write`
-write_ranges(&mut output, &buffer[..length])?;
-// -> "32-126,12353-12438,12449-12538,19968-40958"
-```
-
-With the `alloc` feature, `merge_contiguous_ranges(Vec<Range<u32>>) -> Vec<Range<u32>>`, `format_range` and `format_ranges` return owned values instead.
-
-Supported locales: `en`, `fr`, `de`, `es`, `it`, `pt`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`, `uk`, `be`, `el`, `ar`, `he`, `ja`, `zh`, `zh-CN`, `zh-TW`, `ko`, `hi`, `th`, `vi`.
+## Runtime helpers
 
 ### Localized date and time formatting
 
@@ -408,7 +478,32 @@ With the `alloc` feature, `format_unix_timestamp()` and `DateTimeFormatter::form
 
 The names and patterns come from a compile-time table covering `ar`, `be`, `cs`, `da`, `de`, `el`, `en` (with `en-GB`, `en-IE`, `en-AU`, `en-NZ`, `en-IN` and `en-CA` patterns), `es`, `fr` (with `fr-CA` and `fr-CH` patterns), `he`, `hi`, `hu`, `it`, `ja`, `ko`, `nb` / `nn` / `no`, `nl`, `pl`, `pt`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi` and `zh`. The build locale is resolved once at compile time (`EMBEDDED_I18N_LOCALE`, then each `EMBEDDED_I18N_FALLBACK`, then English) into the `DATE_TIME_LOCALE` constant, so only the strings of that locale end up in the firmware. `date_time_locale("de")` returns another locale's data for `DateTimeFormatter::with_locale()`; calling it with a runtime string links the whole table. Digits are always ASCII and the calendar is always Gregorian.
 
-## Features
+### Unicode ranges for font subsetting
+
+Map locales to Unicode code-point ranges for font subsetting:
+
+```rust
+use embedded_i18n::{get_locale_ranges, merge_contiguous_ranges_in_place, write_ranges};
+
+// Get ranges for a locale
+let ranges = get_locale_ranges("ja").unwrap();
+// -> [Basic Latin, Hiragana, Katakana, CJK Unified Ideographs]
+
+// Sort and merge overlapping/adjacent ranges, without allocation
+let mut buffer = [0..0, 0..0, 0..0, 0..0];
+buffer.clone_from_slice(ranges);
+let length = merge_contiguous_ranges_in_place(&mut buffer);
+
+// Format for fontconfig-like syntax into any `core::fmt::Write`
+write_ranges(&mut output, &buffer[..length])?;
+// -> "32-126,12353-12438,12449-12538,19968-40958"
+```
+
+With the `alloc` feature, `merge_contiguous_ranges(Vec<Range<u32>>) -> Vec<Range<u32>>`, `format_range` and `format_ranges` return owned values instead.
+
+Supported locales: `en`, `fr`, `de`, `es`, `it`, `pt`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`, `uk`, `be`, `el`, `ar`, `he`, `ja`, `zh`, `zh-CN`, `zh-TW`, `ko`, `hi`, `th`, `vi`.
+
+## Cargo features
 
 | Feature        | Description                                                                          |
 | -------------- | ------------------------------------------------------------------------------------ |
@@ -421,8 +516,6 @@ The names and patterns come from a compile-time table covering `ar`, `be`, `cs`,
 | `alloc`        | `String` / `Vec` returning helpers (`format_unix_timestamp`, `format_ranges`, ...)   |
 | `std`          | Enables `alloc` and runtime locale getters (`get_locale_build()`, ...)               |
 
-### Backend selection
-
 By default the JSON backend is enabled. To use another format, disable default features:
 
 ```toml
@@ -432,13 +525,17 @@ embedded-i18n = { version = "0.1", default-features = false, features = ["backen
 
 Several backends can be enabled simultaneously, the first matching file wins (see [Locale resolution](#locale-resolution)). All parsing happens in the proc macro at compile time: the backends add no code and no dependency to the firmware.
 
-## `no_std` Support
+## `no_std` support
 
 This crate is `#![no_std]` and needs no allocator by default. The `translate!()` macro, the Unicode range helpers and the timestamp formatting all work without `alloc`: they return `&'static` data, work in place or write into a `core::fmt::Write`. Enable the `alloc` feature for the `String` / `Vec` returning variants.
 
 ## Minimum Supported Rust Version
 
 Rust 1.85 (edition 2024). Raising it is not considered a breaking change.
+
+## Contributing
+
+Issues and pull requests are welcome. Pull request titles follow [Conventional Commits](https://www.conventionalcommits.org) (`feat: ...`, `fix: ...`), as they become the changelog; releases are automated, see [RELEASING.md](RELEASING.md).
 
 ## License
 
