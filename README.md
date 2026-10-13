@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/embedded-i18n)](https://docs.rs/embedded-i18n)
 [![codecov](https://codecov.io/github/AlixANNERAUD/embedded-i18n/graph/badge.svg?token=0C27GIS0BK)](https://codecov.io/github/AlixANNERAUD/embedded-i18n)
 
-Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON locale files and embeds them directly into ROM, no runtime loading, no allocator required for translations.
+Compile-time internationalization (i18n) for embedded and `no_std` systems. Translates strings at build time from JSON or GNU gettext PO locale files and embeds them directly into ROM, no runtime loading, no allocator required for translations.
 
 ## Installation
 

@@ -15,7 +15,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Compile-time internationalization (i18n) for embedded and no_std systems — translate strings at build time from JSON or PO locale files and embed them directly into ROM."
+description = "Compile-time internationalization (i18n) for embedded and no_std systems — translate strings at build time from JSON or GNU gettext PO locale files and embed them directly into ROM."
 keywords = ["i18n", "internationalization", "embedded", "no-std", "localization"]
 categories = ["internationalization", "embedded", "no-std"]
 
