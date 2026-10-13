@@ -1,10 +1,11 @@
 [package]
 name = "embedded-i18n-macros"
-version = "0.1.0"
-edition = "2024"
-authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
-license = "MIT"
-description = "Proc macros for embedded-i18n — compile-time translation embedding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Internal implementation detail of embedded-i18n. Not meant for direct use; depend on embedded-i18n instead."
 
 [dependencies]
 syn = "2.0"

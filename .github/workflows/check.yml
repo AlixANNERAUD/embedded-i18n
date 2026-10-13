@@ -41,3 +41,23 @@ jobs:
           slug: AlixANNERAUD/embedded-i18n
           files: lcov.info
           fail_ci_if_error: true
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Version consistency
+        run: |
+          metadata=$(cargo metadata --format-version 1 --no-deps)
+          root=$(echo "$metadata" | jq -r '.packages[] | select(.name == "embedded-i18n") | .version')
+          macros=$(echo "$metadata" | jq -r '.packages[] | select(.name == "embedded-i18n-macros") | .version')
+          pin=$(echo "$metadata" | jq -r '.packages[] | select(.name == "embedded-i18n") | .dependencies[] | select(.name == "embedded-i18n-macros") | .req')
+          echo "embedded-i18n=$root embedded-i18n-macros=$macros pin=$pin"
+          test "$root" = "$macros"
+          test "$pin" = "=$root"
+
+      - name: Package
+        run: cargo package --workspace
