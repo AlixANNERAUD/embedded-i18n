@@ -1,6 +1,7 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
-use crate::CONTEXT_SEPARATOR;
+use crate::plural::Expression;
+use crate::{CONTEXT_SEPARATOR, Translations};
 
 pub const EXTENSIONS: &[&str] = &["po"];
 
@@ -21,16 +22,25 @@ enum Field {
     String,
 }
 
-pub fn load(path: &Path) -> Result<HashMap<String, String>, String> {
+pub fn load(path: &Path) -> Result<Translations, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
     parse(&content)
 }
 
-fn parse(content: &str) -> Result<HashMap<String, String>, String> {
-    let mut translations = HashMap::new();
+fn parse(content: &str) -> Result<Translations, String> {
+    let mut translations = Translations::default();
     for entry in entries(content)? {
         let Some(id) = entry.id else { continue };
+        let mut strings = entry.strings;
+        strings.sort_by_key(|(index, _)| *index);
+        if id.is_empty() && entry.context.is_none() {
+            if let Some((_, header)) = strings.first() {
+                translations.plural_rule = Expression::from_header(header)
+                    .map_err(|e| format!("PO parse error: {}", e))?;
+            }
+            continue;
+        }
         if id.is_empty() || entry.fuzzy {
             continue;
         }
@@ -38,13 +48,24 @@ fn parse(content: &str) -> Result<HashMap<String, String>, String> {
             Some(context) => format!("{}{}{}", context, CONTEXT_SEPARATOR, id),
             None => id,
         };
-        if let Some((_, value)) = entry
-            .strings
-            .into_iter()
-            .find(|(index, value)| *index == 0 && !value.is_empty())
+        if strings
+            .iter()
+            .enumerate()
+            .any(|(position, (index, _))| position != *index)
         {
-            translations.insert(key, value);
+            return Err(format!(
+                "PO parse error: msgstr indexes of {:?} are not contiguous",
+                key
+            ));
         }
+        let strings: Vec<String> = strings.into_iter().map(|(_, value)| value).collect();
+        if strings.is_empty() || strings.iter().any(String::is_empty) {
+            continue;
+        }
+        if entry.plural_id.is_some() {
+            translations.plurals.insert(key.clone(), strings.clone());
+        }
+        translations.messages.insert(key, strings[0].clone());
     }
     Ok(translations)
 }
@@ -181,7 +202,7 @@ mod tests {
             b"msgid \"Hello\"\nmsgstr \"Bonjour\"\n\nmsgid \"Goodbye\"\nmsgstr \"Au revoir\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 2);
         assert_eq!(map.get("Hello").unwrap(), "Bonjour");
         assert_eq!(map.get("Goodbye").unwrap(), "Au revoir");
@@ -192,7 +213,7 @@ mod tests {
         let content = b"msgid \"\"\nmsgstr \"\"\n\"Language: fr\\n\"\n\"MIME-Version: 1.0\\n\"\n\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("Hello").unwrap(), "Bonjour");
     }
@@ -203,7 +224,7 @@ mod tests {
             b"msgid \"\"\n\"Hello \"\n\"World\"\nmsgstr \"\"\n\"Bonjour \"\n\"le monde\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.get("Hello World").unwrap(), "Bonjour le monde");
     }
 
@@ -212,7 +233,7 @@ mod tests {
         let content = b"msgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"fichier\"\nmsgstr[1] \"fichiers\"\n\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("file").unwrap(), "fichier");
     }
@@ -222,7 +243,7 @@ mod tests {
         let content = b"msgid \"Line \\\"break\\\"\"\nmsgstr \"Saut de\\nligne\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("Line \"break\"").unwrap(), "Saut de\nligne");
     }
@@ -232,7 +253,7 @@ mod tests {
         let content = b"# This is a comment\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.get("Hello").unwrap(), "Bonjour");
     }
 
@@ -241,7 +262,7 @@ mod tests {
         let content = b"msgid \"Hello\"\nmsgstr \"\"\n\nmsgid \"World\"\nmsgstr \"Monde\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("World").unwrap(), "Monde");
     }
@@ -252,7 +273,7 @@ mod tests {
             b"#, fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n\nmsgid \"World\"\nmsgstr \"Monde\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("World").unwrap(), "Monde");
     }
@@ -262,7 +283,7 @@ mod tests {
         let content = b"#: src/main.rs:1\n#, c-format, fuzzy\n#| msgid \"Helo\"\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert!(map.is_empty());
     }
 
@@ -272,7 +293,7 @@ mod tests {
             b"#, fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\nmsgid \"World\"\nmsgstr \"Monde\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("World").unwrap(), "Monde");
     }
@@ -282,7 +303,7 @@ mod tests {
         let content = b"#, c-format, no-fuzzy-ish\n# fuzzy\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.get("Hello").unwrap(), "Bonjour");
     }
 
@@ -291,7 +312,7 @@ mod tests {
         let content = b"#, fuzzy\nmsgid \"\"\nmsgstr \"\"\n\"Language: fr\\n\"\n\nmsgid \"Hello\"\nmsgstr \"Bonjour\"\n";
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(content).unwrap();
-        let map = load(f.path()).unwrap();
+        let map = load(f.path()).unwrap().messages;
         assert_eq!(map.get("Hello").unwrap(), "Bonjour");
     }
 
@@ -300,7 +321,7 @@ mod tests {
         let map = parse(
             "msgctxt \"menu\"\nmsgid \"Open\"\nmsgstr \"Ouvrir\"\n\nmsgctxt \"state\"\nmsgid \"Open\"\nmsgstr \"Ouvert\"\n\nmsgid \"Open\"\nmsgstr \"Ouvre\"\n",
         )
-        .unwrap();
+        .unwrap().messages;
         assert_eq!(map.len(), 3);
         assert_eq!(map["menu\u{4}Open"], "Ouvrir");
         assert_eq!(map["state\u{4}Open"], "Ouvert");
@@ -310,7 +331,8 @@ mod tests {
     #[test]
     fn multi_line_context() {
         let map = parse("msgctxt \"\"\n\"main \"\n\"menu\"\nmsgid \"Open\"\nmsgstr \"Ouvrir\"\n")
-            .unwrap();
+            .unwrap()
+            .messages;
         assert_eq!(map["main menu\u{4}Open"], "Ouvrir");
     }
 
@@ -319,7 +341,7 @@ mod tests {
         let map = parse(
             "msgid \"Hello\"\nmsgstr \"Bonjour\"\nmsgctxt \"menu\"\nmsgid \"Open\"\nmsgstr \"Ouvrir\"\n",
         )
-        .unwrap();
+        .unwrap().messages;
         assert_eq!(map["Hello"], "Bonjour");
         assert_eq!(map["menu\u{4}Open"], "Ouvrir");
     }
@@ -328,7 +350,8 @@ mod tests {
     fn obsolete_entries_are_skipped() {
         let map =
             parse("#~ msgid \"Old\"\n#~ msgstr \"Vieux\"\nmsgid \"New\"\nmsgstr \"Nouveau\"\n")
-                .unwrap();
+                .unwrap()
+                .messages;
         assert_eq!(map.len(), 1);
         assert_eq!(map["New"], "Nouveau");
     }
@@ -344,5 +367,59 @@ mod tests {
     #[test]
     fn reports_unterminated_string() {
         assert!(parse("msgid \"a\nmsgstr \"b\"\n").is_err());
+    }
+
+    #[test]
+    fn plural_entries_keep_every_form() {
+        let translations = parse(
+            "msgid \"\"\nmsgstr \"\"\n\"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n==2 ? 1 : 2);\\n\"\n\nmsgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"one\"\nmsgstr[2] \"many\"\nmsgstr[1] \"two\"\n",
+        )
+        .unwrap();
+        assert_eq!(translations.plurals["file"], ["one", "two", "many"]);
+        assert_eq!(translations.messages["file"], "one");
+        assert_eq!(translations.plural_rule.unwrap().evaluate(2), 1);
+    }
+
+    #[test]
+    fn plural_entries_with_context() {
+        let translations = parse(
+            "msgctxt \"inbox\"\nmsgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"fichier\"\nmsgstr[1] \"fichiers\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            translations.plurals["inbox\u{4}file"],
+            ["fichier", "fichiers"]
+        );
+        assert!(translations.plural_rule.is_none());
+    }
+
+    #[test]
+    fn partially_translated_plurals_are_skipped() {
+        let translations = parse(
+            "msgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"fichier\"\nmsgstr[1] \"\"\n",
+        )
+        .unwrap();
+        assert!(translations.plurals.is_empty());
+        assert!(translations.messages.is_empty());
+    }
+
+    #[test]
+    fn reports_missing_plural_index() {
+        assert!(
+            parse("msgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"a\"\nmsgstr[2] \"b\"\n")
+                .err()
+                .unwrap()
+                .contains("not contiguous")
+        );
+    }
+
+    #[test]
+    fn reports_invalid_plural_forms_header() {
+        assert!(
+            parse("msgid \"\"\nmsgstr \"Plural-Forms: nplurals=2; plural=n ==;\\n\"\n")
+                .err()
+                .unwrap()
+                .starts_with("PO parse error: invalid plural expression")
+        );
     }
 }

@@ -6,9 +6,22 @@
   "missing_in_french": "Only in English",
   "with_named_args": "Hello {name}, you have {count} messages",
   "menu": {
-    "Open": "Open (menu)"
+    "Open": "Open (menu)",
+    "files": {
+      "one": "Open file",
+      "other": "Open files"
+    }
   },
   "state": {
     "Open": "Open (state)"
+  },
+  "files": {
+    "one": "{count} file",
+    "other": "{count} files"
+  },
+  "files_with_zero": {
+    "zero": "No files",
+    "one": "{count} file",
+    "other": "{count} files"
   }
 }

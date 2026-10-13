@@ -86,7 +86,7 @@ login = Log in
     .placeholder = Email
 ```
 
-Simple Fluent messages are supported: text, message and term references, string and number literals, and attributes (as `login.placeholder`). Variables become named format placeholders (`{ $user-name }` → `{user_name}`) for `translate_args!()` and `translate_write!()`. Select expressions, functions and parameterized terms are reported as compile errors.
+Simple Fluent messages are supported: text, message and term references, string and number literals, and attributes (as `login.placeholder`). Variables become named format placeholders (`{ $user-name }` → `{user_name}`) for `translate_args!()` and `translate_write!()`. A select expression making up a whole message becomes one key per variant (`emails.one`, `emails.other`) and the default variant is also available as `emails`, which is how plural forms are written in Fluent. Select expressions mixed with text, functions and parameterized terms are reported as compile errors.
 
 ### Build configuration
 
@@ -136,6 +136,50 @@ let state = translate!(context = "state", "Open");
   ```
 
 A key with a context never falls back to the same key without context.
+
+### Plural forms
+
+`translate_plural!()` picks the plural form matching a runtime count, using the plural rules of the locale the message comes from. Only the selection runs at runtime: an `if` / `match` on the count, generated at compile time, returning a `&'static str` (or `&'static CStr`).
+
+```rust
+use embedded_i18n::{translate_plural, translate_plural_write};
+
+let label: &'static str = translate_plural!("files", count);
+
+translate_plural_write!(&mut display, "files", count)?;
+```
+
+`translate_plural_write!()` writes the selected form into any `core::fmt::Write` and binds the count to `count`, so forms can use `{count}` (and any variable in scope) without allocating. Extra format arguments can follow the count, but every form must then use them. Both macros accept a `context` and any integer count; negative counts use their absolute value.
+
+**JSON, YAML, TOML and Fluent** use the [CLDR plural categories](https://cldr.unicode.org/index/cldr-spec/plural-rules) as nested keys:
+
+```json
+{
+  "files": {
+    "zero": "No files",
+    "one": "{count} file",
+    "other": "{count} files"
+  }
+}
+```
+
+Every category the locale uses for integers is required, plus `other` (e.g. `one`, `few`, `many` and `other` for Russian), and a missing one is a compile error. `zero` is optional and used for a count of 0 in languages without a `zero` category. The `many` form of French, Spanish, Italian, Portuguese and Catalan (millions) is optional and falls back to `other`. Integer plural rules are built in for `ar`, `be`, `bg`, `bn`, `ca`, `cs`, `da`, `de`, `el`, `en`, `es`, `et`, `fi`, `fr`, `he`, `hi`, `hu`, `id`, `it`, `ja`, `km`, `ko`, `lo`, `ms`, `my`, `nb`, `nl`, `nn`, `no`, `pl`, `pt`, `pt-PT`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi` and `zh`.
+
+**GNU gettext PO / MO** use `msgid_plural` and `msgstr[N]`, and the `Plural-Forms` expression of the file header is compiled to Rust, so any language works. Without a header the gettext default `plural=(n != 1)` applies.
+
+```po
+msgid ""
+msgstr ""
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "file"
+msgid_plural "files"
+msgstr[0] "{count} файл"
+msgstr[1] "{count} файла"
+msgstr[2] "{count} файлов"
+```
+
+`translate!()` on a gettext plural message returns its first form. As with `msgfmt`, a plural entry with an empty form is treated as untranslated and resolves through the fallback locales.
 
 ### `translate_args!()` and `translate_write!()`
 

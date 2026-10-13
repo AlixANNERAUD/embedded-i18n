@@ -5,9 +5,22 @@
   "c_greeting": "Bonjour du C",
   "with_named_args": "Bonjour {name}, vous avez {count} messages",
   "menu": {
-    "Open": "Ouvrir"
+    "Open": "Ouvrir",
+    "files": {
+      "one": "Fichier ouvert",
+      "other": "Fichiers ouverts"
+    }
   },
   "state": {
     "Open": "Ouvert"
+  },
+  "files": {
+    "one": "{count} fichier",
+    "other": "{count} fichiers"
+  },
+  "files_with_zero": {
+    "zero": "Aucun fichier",
+    "one": "{count} fichier",
+    "other": "{count} fichiers"
   }
 }

@@ -1,6 +1,8 @@
 use std::{collections::HashMap, path::Path};
 
-use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
+use fluent_syntax::ast::{
+    Entry, Expression, InlineExpression, Pattern, PatternElement, VariantKey,
+};
 use fluent_syntax::unicode::unescape_unicode_to_string;
 
 pub const EXTENSIONS: &[&str] = &["ftl"];
@@ -72,16 +74,53 @@ fn parse(content: &str) -> Result<HashMap<String, String>, String> {
 
     for (id, (value, attributes)) in &index.messages {
         if let Some(value) = value {
-            translations.insert(id.to_string(), resolve(&index, id, value, 0)?);
+            insert(&mut translations, &index, id.to_string(), value)?;
         }
         for (attribute, value) in attributes {
-            let key = format!("{}.{}", id, attribute);
-            let value = resolve(&index, &key, value, 0)?;
-            translations.insert(key, value);
+            insert(
+                &mut translations,
+                &index,
+                format!("{}.{}", id, attribute),
+                value,
+            )?;
         }
     }
 
     Ok(translations)
+}
+
+fn insert(
+    translations: &mut HashMap<String, String>,
+    resource: &Resource,
+    key: String,
+    pattern: &Pattern<&str>,
+) -> Result<(), String> {
+    if let [
+        PatternElement::Placeable {
+            expression:
+                Expression::Select {
+                    selector: InlineExpression::VariableReference { .. },
+                    variants,
+                },
+        },
+    ] = pattern.elements.as_slice()
+    {
+        for variant in variants {
+            let name = match &variant.key {
+                VariantKey::Identifier { name } => name.to_string(),
+                VariantKey::NumberLiteral { value } => value.to_string(),
+            };
+            let value = resolve(resource, &key, &variant.value, 0)?;
+            if variant.default {
+                translations.insert(key.clone(), value.clone());
+            }
+            translations.insert(format!("{}.{}", key, name), value);
+        }
+        return Ok(());
+    }
+    let value = resolve(resource, &key, pattern, 0)?;
+    translations.insert(key, value);
+    Ok(())
 }
 
 fn resolve(
@@ -122,7 +161,7 @@ fn expression_value(
     };
 
     match expression {
-        Expression::Select { .. } => unsupported("select expression"),
+        Expression::Select { .. } => unsupported("select expression mixed with other text"),
         Expression::Inline(inline) => match inline {
             InlineExpression::StringLiteral { value } => {
                 Ok(unescape_unicode_to_string(value).into_owned())
@@ -190,13 +229,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_select_expressions() {
-        let error = parse("emails = { $count ->\n    [one] One email\n   *[other] Emails\n}\n")
-            .err()
-            .unwrap();
+    fn whole_message_select_becomes_variant_keys() {
+        let translations = parse(
+            "emails = { $count ->\n    [one] One email\n   *[other] { $count } emails\n}\nlogin = Log in\n    .title = { $gender ->\n        [male] He\n       *[other] They\n    }\n",
+        )
+        .unwrap();
+        assert_eq!(translations["emails.one"], "One email");
+        assert_eq!(translations["emails.other"], "{count} emails");
+        assert_eq!(translations["emails"], "{count} emails");
+        assert_eq!(translations["login.title.male"], "He");
+        assert_eq!(translations["login.title.other"], "They");
+        assert_eq!(translations["login.title"], "They");
+    }
+
+    #[test]
+    fn rejects_select_mixed_with_text() {
+        let error =
+            parse("emails = You have { $count ->\n    [one] one email\n   *[other] emails\n}\n")
+                .err()
+                .unwrap();
         assert_eq!(
             error,
-            "Fluent error: select expression in \"emails\" is not supported"
+            "Fluent error: select expression mixed with other text in \"emails\" is not supported"
         );
     }
 
