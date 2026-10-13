@@ -333,30 +333,51 @@ With the `alloc` feature, `merge_contiguous_ranges(Vec<Range<u32>>) -> Vec<Range
 
 Supported locales: `en`, `fr`, `de`, `es`, `it`, `pt`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`, `uk`, `be`, `el`, `ar`, `he`, `ja`, `zh`, `zh-CN`, `zh-TW`, `ko`, `hi`, `th`, `vi`.
 
-### Timestamp formatting
+### Localized date and time formatting
 
-`strftime`-style formatting without libc, written into any `core::fmt::Write`:
+`strftime`-style formatting without libc and without allocation, written into any `core::fmt::Write`. Month and weekday names, AM/PM markers and the default date and time patterns follow the build locale:
 
 ```rust
-use embedded_i18n::write_unix_timestamp;
+use embedded_i18n::{write_unix_timestamp, DateTimeFormatter};
 
-write_unix_timestamp(&mut output, 0, "%Y-%m-%d %H:%M:%S")?;
-// -> "1970-01-01 00:00:00"
+write_unix_timestamp(&mut output, 1_791_884_800, "%A %d %B %Y, %X")?;
+// EMBEDDED_I18N_LOCALE=en -> "Tuesday 13 October 2026, 09:46:40 AM"
+// EMBEDDED_I18N_LOCALE=fr -> "mardi 13 octobre 2026, 09:46:40"
+
+let paris = DateTimeFormatter::new().with_utc_offset(2 * 3600);
+paris.write(&mut output, 1_791_884_800, "%x %H:%M %z")?;
+// EMBEDDED_I18N_LOCALE=fr -> "13/10/2026 11:46 +0200"
+
+write!(output, "Updated {}", paris.display(1_791_884_800, "%c"))?;
 ```
 
-With the `alloc` feature, `format_unix_timestamp(0, "%Y-%m-%d %H:%M:%S")` returns a `String`.
+With the `alloc` feature, `format_unix_timestamp()` and `DateTimeFormatter::format()` return a `String`.
 
-| Token | Description                           |
-| ----- | ------------------------------------- |
-| `%Y`  | Year with century (e.g. `2026`)       |
-| `%m`  | Zero-padded month (`01`–`12`)         |
-| `%d`  | Zero-padded day (`01`–`31`)           |
-| `%H`  | Zero-padded hour, 24-hour (`00`–`23`) |
-| `%I`  | Zero-padded hour, 12-hour (`01`–`12`) |
-| `%M`  | Zero-padded minute (`00`–`59`)        |
-| `%S`  | Zero-padded second (`00`–`59`)        |
-| `%p`  | `AM` / `PM`                           |
-| `%%`  | Literal `%`                           |
+| Token       | Description                                                  |
+| ----------- | ------------------------------------------------------------ |
+| `%Y`        | Year with century (e.g. `2026`)                              |
+| `%y`        | Year without century (`00`–`99`)                             |
+| `%m`        | Zero-padded month (`01`–`12`)                                |
+| `%d`        | Zero-padded day (`01`–`31`)                                  |
+| `%e`        | Space-padded day (` 1`–`31`)                                 |
+| `%H`        | Zero-padded hour, 24-hour (`00`–`23`)                        |
+| `%I`        | Zero-padded hour, 12-hour (`01`–`12`)                        |
+| `%M`        | Zero-padded minute (`00`–`59`)                               |
+| `%S`        | Zero-padded second (`00`–`59`)                               |
+| `%p`        | Localized AM / PM marker (`AM`, `午後`, `오전`, ...)            |
+| `%B`        | Localized month name, in the form used in dates (`октября`)  |
+| `%OB`       | Localized standalone month name (`октябрь`)                  |
+| `%b` / `%h` | Localized abbreviated month name                             |
+| `%A`        | Localized weekday name                                       |
+| `%a`        | Localized abbreviated weekday name                           |
+| `%u` / `%w` | Weekday number, `1`–`7` from Monday / `0`–`6` from Sunday    |
+| `%x`        | Localized date (`10/13/2026`, `13/10/2026`, `13.10.2026`...) |
+| `%X`        | Localized time (`09:46:40 AM`, `09:46:40`...)                |
+| `%c`        | Localized date and time (`%x %X`)                            |
+| `%z`        | UTC offset (`+0200`, `-0330`)                                |
+| `%%`        | Literal `%`                                                  |
+
+The names and patterns come from a compile-time table covering `ar`, `be`, `cs`, `da`, `de`, `el`, `en` (with `en-GB`, `en-IE`, `en-AU`, `en-NZ`, `en-IN` and `en-CA` patterns), `es`, `fr` (with `fr-CA` and `fr-CH` patterns), `he`, `hi`, `hu`, `it`, `ja`, `ko`, `nb` / `nn` / `no`, `nl`, `pl`, `pt`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi` and `zh`. The build locale is resolved once at compile time (`EMBEDDED_I18N_LOCALE`, then each `EMBEDDED_I18N_FALLBACK`, then English) into the `DATE_TIME_LOCALE` constant, so only the strings of that locale end up in the firmware. `date_time_locale("de")` returns another locale's data for `DateTimeFormatter::with_locale()`; calling it with a runtime string links the whole table. Digits are always ASCII and the calendar is always Gregorian.
 
 ## Features
 
