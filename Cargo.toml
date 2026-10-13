@@ -26,7 +26,8 @@ embedded-i18n-macros = { version = "=0.1.0", path = "./macros", default-features
 
 [features]
 default = ["backend-json"]
-std = []
+alloc = []
+std = ["alloc"]
 backend-json = ["embedded-i18n-macros/backend-json"]
 backend-po = ["embedded-i18n-macros/backend-po"]
 

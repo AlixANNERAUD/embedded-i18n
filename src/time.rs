@@ -1,4 +1,6 @@
-use alloc::format;
+use core::fmt::{self, Write};
+
+#[cfg(feature = "alloc")]
 use alloc::string::String;
 
 fn decompose_unix_timestamp(unix_timestamp: i64) -> (u16, u8, u8, u8, u8, u8) {
@@ -73,36 +75,46 @@ fn days_in_month(year: i64, month: usize) -> i64 {
     }
 }
 
-pub fn format_unix_timestamp(unix_timestamp: i64, pattern: &str) -> String {
+pub fn write_unix_timestamp<W: Write>(
+    writer: &mut W,
+    unix_timestamp: i64,
+    pattern: &str,
+) -> fmt::Result {
     let (year, month, day, hour, minute, second) = decompose_unix_timestamp(unix_timestamp);
 
-    let mut output = String::with_capacity(pattern.len() + 16);
     let mut characters = pattern.chars();
 
     while let Some(character) = characters.next() {
         if character != '%' {
-            output.push(character);
+            writer.write_char(character)?;
             continue;
         }
 
         match characters.next() {
-            Some('Y') => output.push_str(&format!("{:04}", year)),
-            Some('m') => output.push_str(&format!("{:02}", month)),
-            Some('d') => output.push_str(&format!("{:02}", day)),
-            Some('H') => output.push_str(&format!("{:02}", hour)),
-            Some('I') => output.push_str(&format!("{:02}", hour_12(hour))),
-            Some('M') => output.push_str(&format!("{:02}", minute)),
-            Some('S') => output.push_str(&format!("{:02}", second)),
-            Some('p') => output.push_str(if hour < 12 { "AM" } else { "PM" }),
-            Some('%') => output.push('%'),
+            Some('Y') => write!(writer, "{:04}", year)?,
+            Some('m') => write!(writer, "{:02}", month)?,
+            Some('d') => write!(writer, "{:02}", day)?,
+            Some('H') => write!(writer, "{:02}", hour)?,
+            Some('I') => write!(writer, "{:02}", hour_12(hour))?,
+            Some('M') => write!(writer, "{:02}", minute)?,
+            Some('S') => write!(writer, "{:02}", second)?,
+            Some('p') => writer.write_str(if hour < 12 { "AM" } else { "PM" })?,
+            Some('%') => writer.write_char('%')?,
             Some(other) => {
-                output.push('%');
-                output.push(other);
+                writer.write_char('%')?;
+                writer.write_char(other)?;
             }
-            None => output.push('%'),
+            None => writer.write_char('%')?,
         }
     }
 
+    Ok(())
+}
+
+#[cfg(feature = "alloc")]
+pub fn format_unix_timestamp(unix_timestamp: i64, pattern: &str) -> String {
+    let mut output = String::with_capacity(pattern.len() + 16);
+    let _ = write_unix_timestamp(&mut output, unix_timestamp, pattern);
     output
 }
 
@@ -113,7 +125,7 @@ const fn hour_12(hour_24: u8) -> u8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
 
@@ -304,5 +316,61 @@ mod tests {
     #[test]
     fn multiple_percent_escape() {
         assert_eq!(format_unix_timestamp(0, "%%Y%%m%%d%%"), "%Y%m%d%");
+    }
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    struct Buffer {
+        bytes: [u8; 64],
+        length: usize,
+    }
+
+    impl Buffer {
+        fn new() -> Self {
+            Buffer {
+                bytes: [0; 64],
+                length: 0,
+            }
+        }
+
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.bytes[..self.length]).unwrap()
+        }
+    }
+
+    impl Write for Buffer {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            let end = self.length + value.len();
+            if end > self.bytes.len() {
+                return Err(fmt::Error);
+            }
+            self.bytes[self.length..end].copy_from_slice(value.as_bytes());
+            self.length = end;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_epoch() {
+        let mut buffer = Buffer::new();
+        write_unix_timestamp(&mut buffer, 0, "%Y-%m-%d %H:%M:%S").unwrap();
+        assert_eq!(buffer.as_str(), "1970-01-01 00:00:00");
+    }
+
+    #[test]
+    fn write_12_hour_time() {
+        let mut buffer = Buffer::new();
+        write_unix_timestamp(&mut buffer, 13 * 3600 + 5 * 60, "%I:%M %p %%").unwrap();
+        assert_eq!(buffer.as_str(), "01:05 PM %");
+    }
+
+    #[test]
+    fn write_propagates_errors() {
+        let mut buffer = Buffer::new();
+        let pattern = "%Y-%m-%d %H:%M:%S %Y-%m-%d %H:%M:%S %Y-%m-%d %H:%M:%S %Y-%m-%d";
+        assert!(write_unix_timestamp(&mut buffer, 0, pattern).is_err());
     }
 }
