@@ -247,6 +247,7 @@ Translations are loaded from files in the `locales/` directory (or `EMBEDDED_I18
 | `EMBEDDED_I18N_LOCALE`   | `en`    | Primary locale                                                 |
 | `EMBEDDED_I18N_FALLBACK` | `en`    | Comma separated fallback locales (keys missing from the primary locale are looked up here, in order) |
 | `EMBEDDED_I18N_PATH`     | `locales` | Locale files directory, relative to the `Cargo.toml` of the crate calling `translate!()`, or absolute |
+| `EMBEDDED_I18N_STRICT`   | unset   | When set (`1`, `true`, ...), a message missing from the primary locale is a compile error instead of using the fallbacks |
 
 Locale identifiers are normalized like BCP 47 tags (`fr_ca`, `FR-CA` and `fr-CA` are the same locale), and region or script subtags are dropped one at a time before moving to the next fallback. With `EMBEDDED_I18N_LOCALE=fr-CA` and `EMBEDDED_I18N_FALLBACK=de,en`, a key is looked up in `fr-CA`, `fr`, `de`, then `en`. Locale files can be named `fr-CA`, `fr_CA`, `fr-ca` or `fr_ca`. Missing files are skipped and the first non-empty translation wins.
 
@@ -258,6 +259,22 @@ EMBEDDED_I18N_PATH = { value = "i18n", relative = true }
 ```
 
 A missing directory is reported as a compile error naming the resolved path.
+
+### Translation coverage
+
+By default a message missing from the selected locale silently resolves through the fallback locales, which is what you want while translations are in progress. To make sure a release ships fully translated, build with strict mode:
+
+```sh
+EMBEDDED_I18N_STRICT=1 EMBEDDED_I18N_LOCALE=fr cargo build
+```
+
+Every `translate!()`, `translate_plural!()` and `translate_select!()` must then find its message in the primary locale (`fr-CA` and `fr` for `EMBEDDED_I18N_LOCALE=fr-CA`), otherwise the build fails at the call site:
+
+```text
+error: translation for "Settings" is missing from the primary locale "fr" (EMBEDDED_I18N_STRICT is set)
+```
+
+Running a strict build for each shipped locale in CI catches untranslated strings before release.
 
 ### Unicode range helpers
 

@@ -98,18 +98,51 @@ enum Plural<'a> {
 struct Catalog {
     path: PathBuf,
     chain: Vec<String>,
+    primary: Vec<String>,
+    strict: bool,
     files: Vec<PathBuf>,
     locales: Vec<Locale>,
 }
 
 impl Catalog {
-    fn lookup(&self, keys: &[String]) -> Option<&str> {
-        self.find(keys, |value| !value.is_empty())
-            .or_else(|| self.find(keys, |_| true))
+    fn scope(&self, strict: bool) -> impl Iterator<Item = &Locale> {
+        self.locales
+            .iter()
+            .filter(move |locale| !strict || self.primary.contains(&locale.name))
     }
 
-    fn plural(&self, keys: &[String]) -> Option<Plural<'_>> {
-        self.locales.iter().find_map(|locale| {
+    fn not_found(&self, span: Span, subject: String, found: bool) -> syn::Error {
+        let list = |locales: &[String]| {
+            locales
+                .iter()
+                .map(|locale| format!("{:?}", locale))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let message = if self.strict && found {
+            format!(
+                "{} is missing from the primary locale {} (EMBEDDED_I18N_STRICT is set)",
+                subject,
+                list(&self.primary)
+            )
+        } else {
+            format!(
+                "{} not found in locales {} ({})",
+                subject,
+                list(&self.chain),
+                self.path.display()
+            )
+        };
+        syn::Error::new(span, message)
+    }
+
+    fn lookup(&self, keys: &[String], strict: bool) -> Option<&str> {
+        self.find(keys, strict, |value| !value.is_empty())
+            .or_else(|| self.find(keys, strict, |_| true))
+    }
+
+    fn plural(&self, keys: &[String], strict: bool) -> Option<Plural<'_>> {
+        self.scope(strict).find_map(|locale| {
             keys.iter().find_map(|key| {
                 if let Some(forms) = locale.translations.plurals.get(key) {
                     return Some(Plural::Indexed {
@@ -136,8 +169,8 @@ impl Catalog {
         })
     }
 
-    fn select(&self, keys: &[String]) -> Option<Vec<(&str, &str)>> {
-        self.locales.iter().find_map(|locale| {
+    fn select(&self, keys: &[String], strict: bool) -> Option<Vec<(&str, &str)>> {
+        self.scope(strict).find_map(|locale| {
             keys.iter().find_map(|key| {
                 let prefix = format!("{}.", key);
                 let has_other = locale
@@ -164,8 +197,8 @@ impl Catalog {
         })
     }
 
-    fn find(&self, keys: &[String], accept: impl Fn(&str) -> bool) -> Option<&str> {
-        self.locales.iter().find_map(|locale| {
+    fn find(&self, keys: &[String], strict: bool, accept: impl Fn(&str) -> bool) -> Option<&str> {
+        self.scope(strict).find_map(|locale| {
             keys.iter().find_map(|key| {
                 locale
                     .translations
@@ -187,8 +220,18 @@ static CATALOG: LazyLock<Result<Catalog, String>> = LazyLock::new(|| {
         Path::new(&manifest_directory),
         std::env::var("EMBEDDED_I18N_PATH").ok().as_deref(),
     );
-    load_catalog(&path, &locale, &fallback)
+    let strict = is_enabled(std::env::var("EMBEDDED_I18N_STRICT").ok().as_deref());
+    load_catalog(&path, &locale, &fallback, strict)
 });
+
+fn is_enabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    })
+}
 
 fn locales_directory(manifest_directory: &Path, configured: Option<&str>) -> PathBuf {
     match configured {
@@ -197,7 +240,12 @@ fn locales_directory(manifest_directory: &Path, configured: Option<&str>) -> Pat
     }
 }
 
-fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, String> {
+fn load_catalog(
+    path: &Path,
+    locale: &str,
+    fallback: &str,
+    strict: bool,
+) -> Result<Catalog, String> {
     if !path.is_dir() {
         return Err(format!("locales directory not found: {}", path.display()));
     }
@@ -220,7 +268,9 @@ fn load_catalog(path: &Path, locale: &str, fallback: &str) -> Result<Catalog, St
 
     Ok(Catalog {
         path: path.to_path_buf(),
+        primary: locale::chain(locale, ""),
         chain,
+        strict,
         files,
         locales,
     })
@@ -353,15 +403,12 @@ fn translation(message: &Message, catalog: &Result<Catalog, String>) -> syn::Res
         .map_err(|error| syn::Error::new(span, error))?;
     let name = key.value()?;
 
-    let value = catalog.lookup(&message.keys(&name)).ok_or_else(|| {
-        syn::Error::new(
+    let keys = message.keys(&name);
+    let value = catalog.lookup(&keys, catalog.strict).ok_or_else(|| {
+        catalog.not_found(
             span,
-            format!(
-                "translation for {} not found in locales {} ({})",
-                message.describe(&name),
-                locales_list(catalog),
-                catalog.path.display()
-            ),
+            format!("translation for {}", message.describe(&name)),
+            catalog.lookup(&keys, false).is_some(),
         )
     })?;
 
@@ -388,15 +435,6 @@ fn literal(key: &Key, value: &str, name: &str) -> syn::Result<TokenStream2> {
     }
 }
 
-fn locales_list(catalog: &Catalog) -> String {
-    catalog
-        .chain
-        .iter()
-        .map(|locale| format!("{:?}", locale))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn plural_selection(
     message: &Message,
     catalog: &Result<Catalog, String>,
@@ -410,15 +448,12 @@ fn plural_selection(
     let name = key.value()?;
     let n = proc_macro2::Ident::new("n", Span::mixed_site());
 
-    let plural = catalog.plural(&message.keys(&name)).ok_or_else(|| {
-        syn::Error::new(
+    let keys = message.keys(&name);
+    let plural = catalog.plural(&keys, catalog.strict).ok_or_else(|| {
+        catalog.not_found(
             span,
-            format!(
-                "plural translation for {} not found in locales {} ({})",
-                message.describe(&name),
-                locales_list(catalog),
-                catalog.path.display()
-            ),
+            format!("plural translation for {}", message.describe(&name)),
+            catalog.plural(&keys, false).is_some(),
         )
     })?;
 
@@ -517,15 +552,15 @@ fn select_selection(
         .map_err(|error| syn::Error::new(span, error))?;
     let name = key.value()?;
 
-    let variants = catalog.select(&message.keys(&name)).ok_or_else(|| {
-        syn::Error::new(
+    let keys = message.keys(&name);
+    let variants = catalog.select(&keys, catalog.strict).ok_or_else(|| {
+        catalog.not_found(
             span,
             format!(
-                "select translation for {} with an `other` variant not found in locales {} ({})",
-                message.describe(&name),
-                locales_list(catalog),
-                catalog.path.display()
+                "select translation for {} with an `other` variant",
+                message.describe(&name)
             ),
+            catalog.select(&keys, false).is_some(),
         )
     })?;
 
@@ -854,6 +889,8 @@ mod tests {
         Ok(Catalog {
             path: PathBuf::from("locales"),
             chain: vec!["fr".to_string(), "en".to_string()],
+            primary: vec!["fr".to_string()],
+            strict: false,
             files: vec![
                 PathBuf::from("/locales/fr.json"),
                 PathBuf::from("/locales/en.json"),
@@ -877,7 +914,7 @@ mod tests {
         feature = "backend-fluent"
     ))]
     fn get<'a>(catalog: &'a Catalog, key: &str) -> &'a str {
-        catalog.lookup(&[key.to_string()]).unwrap()
+        catalog.lookup(&[key.to_string()], false).unwrap()
     }
 
     fn error(input: TokenStream2, catalog: &Result<Catalog, String>) -> String {
@@ -972,7 +1009,7 @@ mod tests {
     #[test]
     fn reports_missing_locales_directory() {
         let directory = tempfile::tempdir().unwrap();
-        let error = load_catalog(&directory.path().join("missing"), "en", "en")
+        let error = load_catalog(&directory.path().join("missing"), "en", "en", false)
             .err()
             .unwrap();
         assert!(error.starts_with("locales directory not found"));
@@ -983,7 +1020,9 @@ mod tests {
     fn reports_invalid_locale_file() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("en.json"), "{").unwrap();
-        let error = load_catalog(directory.path(), "en", "en").err().unwrap();
+        let error = load_catalog(directory.path(), "en", "en", false)
+            .err()
+            .unwrap();
         assert!(error.contains("en.json"));
     }
 
@@ -1001,7 +1040,7 @@ mod tests {
             r#"{"greeting": "Hello", "empty": "Empty", "only": "Only"}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en", false).unwrap();
         assert_eq!(get(&catalog, "greeting"), "Bonjour");
         assert_eq!(get(&catalog, "empty"), "Empty");
         assert_eq!(get(&catalog, "only"), "Only");
@@ -1036,7 +1075,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("fr.json"), "{}").unwrap();
         std::fs::write(directory.path().join("en.json"), "{}").unwrap();
-        let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en", false).unwrap();
         assert_eq!(
             catalog.files,
             vec![
@@ -1044,7 +1083,7 @@ mod tests {
                 directory.path().join("en.json")
             ]
         );
-        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
         assert_eq!(catalog.files, vec![directory.path().join("en.json")]);
     }
 
@@ -1170,7 +1209,7 @@ mod tests {
             r#"{"color": "Color", "door": "Door", "bus": "Bus", "train": "Train", "empty": ""}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "fr-ca", "de,en").unwrap();
+        let catalog = load_catalog(directory.path(), "fr-ca", "de,en", false).unwrap();
         assert_eq!(catalog.chain, ["fr-CA", "fr", "de", "en"]);
         assert_eq!(get(&catalog, "color"), "Couleur (CA)");
         assert_eq!(get(&catalog, "door"), "Porte");
@@ -1185,7 +1224,7 @@ mod tests {
     fn locale_file_names_are_matched_case_insensitively() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("zh-cn.json"), r#"{"hello": "你好"}"#).unwrap();
-        let catalog = load_catalog(directory.path(), "zh_CN", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "zh_CN", "en", false).unwrap();
         assert_eq!(get(&catalog, "hello"), "你好");
     }
 
@@ -1198,7 +1237,7 @@ mod tests {
             r#"{"menu": {"settings": {"title": "Settings"}}}"#,
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
         assert_eq!(get(&catalog, "menu.settings.title"), "Settings");
     }
 
@@ -1208,7 +1247,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("fr.yml"), "menu:\n  open: Ouvrir\n").unwrap();
         std::fs::write(directory.path().join("en.yaml"), "menu:\n  open: Open\n").unwrap();
-        let catalog = load_catalog(directory.path(), "fr", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "fr", "en", false).unwrap();
         assert_eq!(get(&catalog, "menu.open"), "Ouvrir");
         assert_eq!(catalog.files.len(), 2);
     }
@@ -1222,7 +1261,7 @@ mod tests {
             "[menu]\nopen = \"Open\"\n",
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
         assert_eq!(get(&catalog, "menu.open"), "Open");
     }
 
@@ -1235,7 +1274,7 @@ mod tests {
             "hello = Hello, { $name }!\n",
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
         assert_eq!(get(&catalog, "hello"), "Hello, {name}!");
     }
 
@@ -1244,7 +1283,9 @@ mod tests {
     fn reports_invalid_mo_file() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("en.mo"), [0u8; 28]).unwrap();
-        let error = load_catalog(directory.path(), "en", "en").err().unwrap();
+        let error = load_catalog(directory.path(), "en", "en", false)
+            .err()
+            .unwrap();
         assert!(error.contains("en.mo"));
     }
 
@@ -1258,7 +1299,7 @@ mod tests {
             "msgid \"a\"\nmsgstr \"po\"\n",
         )
         .unwrap();
-        let catalog = load_catalog(directory.path(), "en", "en").unwrap();
+        let catalog = load_catalog(directory.path(), "en", "en", false).unwrap();
         assert_eq!(get(&catalog, "a"), "json");
     }
 
@@ -1324,6 +1365,8 @@ mod tests {
         let catalog = Ok(Catalog {
             path: PathBuf::from("locales"),
             chain: vec!["fr".to_string(), "en".to_string()],
+            primary: vec!["fr".to_string()],
+            strict: false,
             files: Vec::new(),
             locales: vec![
                 Locale {
@@ -1350,6 +1393,8 @@ mod tests {
         Ok(Catalog {
             path: PathBuf::from("locales"),
             chain: vec![name.to_string()],
+            primary: vec![name.to_string()],
+            strict: false,
             files: Vec::new(),
             locales: vec![Locale {
                 name: name.to_string(),
@@ -1550,6 +1595,8 @@ mod tests {
         let catalog = Ok(Catalog {
             path: PathBuf::from("locales"),
             chain: vec!["fr".to_string(), "en".to_string()],
+            primary: vec!["fr".to_string()],
+            strict: false,
             files: Vec::new(),
             locales: vec![
                 Locale {
@@ -1607,5 +1654,75 @@ mod tests {
         assert!(
             expand_select_write(quote! { output, c"greeting", gender }, &catalog(&[])).is_err()
         );
+    }
+
+    #[test]
+    fn strict_flag_values() {
+        assert!(!is_enabled(None));
+        for value in ["", "0", "false", "No", " off "] {
+            assert!(!is_enabled(Some(value)), "{:?}", value);
+        }
+        for value in ["1", "true", "yes", "ON"] {
+            assert!(is_enabled(Some(value)), "{:?}", value);
+        }
+    }
+
+    #[cfg(feature = "backend-json")]
+    fn strict_catalog() -> Result<Catalog, String> {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("fr.json"),
+            r#"{"door": "Porte", "files": {"one": "fichier", "other": "fichiers"}, "replied": {"other": "Iel"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("en.json"),
+            r#"{"door": "Door", "train": "Train", "boats": {"one": "boat", "other": "boats"}, "answered": {"other": "They"}}"#,
+        )
+        .unwrap();
+        let catalog = load_catalog(directory.path(), "fr-CA", "en", true).unwrap();
+        assert_eq!(catalog.primary, ["fr-CA", "fr"]);
+        Ok(catalog)
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn strict_accepts_keys_of_the_primary_language() {
+        let catalog = strict_catalog();
+        assert!(expand(quote! { "door" }, &catalog).is_ok());
+        assert!(expand_plural(quote! { "files", 2 }, &catalog).is_ok());
+        assert!(expand_select(quote! { "replied", gender }, &catalog).is_ok());
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn strict_rejects_keys_only_in_fallbacks() {
+        let catalog = strict_catalog();
+        assert_eq!(
+            error(quote! { "train" }, &catalog),
+            "translation for \"train\" is missing from the primary locale \"fr-CA\", \"fr\" (EMBEDDED_I18N_STRICT is set)"
+        );
+        assert!(
+            expand_plural(quote! { "boats", 2 }, &catalog)
+                .err()
+                .unwrap()
+                .to_string()
+                .starts_with("plural translation for \"boats\" is missing from the primary locale")
+        );
+        assert!(
+            expand_select(quote! { "answered", gender }, &catalog)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("is missing from the primary locale")
+        );
+    }
+
+    #[cfg(feature = "backend-json")]
+    #[test]
+    fn strict_reports_unknown_keys_as_not_found() {
+        assert!(error(quote! { "unknown" }, &strict_catalog()).starts_with(
+            "translation for \"unknown\" not found in locales \"fr-CA\", \"fr\", \"en\""
+        ));
     }
 }
