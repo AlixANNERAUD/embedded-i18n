@@ -22,5 +22,10 @@
     "zero": "Aucun fichier",
     "one": "{count} fichier",
     "other": "{count} fichiers"
+  },
+  "replied": {
+    "male": "Il a répondu",
+    "female": "Elle a répondu",
+    "other": "Iel a répondu"
   }
 }

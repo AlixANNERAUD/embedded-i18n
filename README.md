@@ -181,6 +181,32 @@ msgstr[2] "{count} файлов"
 
 `translate!()` on a gettext plural message returns its first form. As with `msgfmt`, a plural entry with an empty form is treated as untranslated and resolves through the fallback locales.
 
+### Select variants
+
+`translate_select!()` chooses between variants of a message from a runtime value other than a count: gender, device state, enum variant... The value can be anything implementing `AsRef<str>`, and the expansion is a `match` on string literals returning a `&'static str` (or `&'static CStr`), with no allocation.
+
+```rust
+use embedded_i18n::{translate_select, translate_select_write};
+
+let reply = translate_select!("replied", gender);
+
+translate_select_write!(&mut display, "replied", user.gender, name = user.name)?;
+```
+
+Variants are nested keys, and an `other` variant is required: it is used for any value without a variant of its own.
+
+```json
+{
+  "replied": {
+    "male": "He replied",
+    "female": "She replied",
+    "other": "They replied"
+  }
+}
+```
+
+In PO files the variants are flat keys (`msgid "replied.male"`), and in Fluent a select expression making up the whole message (`{ $gender -> [male] ... *[other] ... }`). All variants come from the first locale of the chain defining an `other` variant for the message. Like the other macros, both accept a `context`, and `translate_select_write!()` takes extra format arguments after the value.
+
 ### `translate_args!()` and `translate_write!()`
 
 Format a translation with arguments without allocating. The translated string becomes the format string, so placeholders are checked against the arguments at compile time:

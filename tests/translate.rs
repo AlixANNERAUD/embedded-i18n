@@ -220,3 +220,47 @@ fn translate_plural_zero_override() {
         "{count} file"
     );
 }
+
+#[test]
+fn translate_select_matches_variant() {
+    assert_eq!(
+        embedded_i18n::translate_select!("replied", "male"),
+        "He replied"
+    );
+    assert_eq!(
+        embedded_i18n::translate_select!("replied", "female"),
+        "She replied"
+    );
+    assert_eq!(
+        embedded_i18n::translate_select!("replied", "unknown"),
+        "They replied"
+    );
+}
+
+enum Gender {
+    Female,
+    Other,
+}
+
+impl AsRef<str> for Gender {
+    fn as_ref(&self) -> &str {
+        match self {
+            Gender::Female => "female",
+            Gender::Other => "other",
+        }
+    }
+}
+
+#[test]
+fn translate_select_accepts_as_ref_str() {
+    assert_eq!(
+        embedded_i18n::translate_select!(c"replied", Gender::Female).to_bytes(),
+        b"She replied"
+    );
+    let mut buffer = Buffer {
+        bytes: [0; 64],
+        length: 0,
+    };
+    embedded_i18n::translate_select_write!(&mut buffer, "replied", Gender::Other).unwrap();
+    assert_eq!(&buffer.bytes[..buffer.length], b"They replied");
+}
