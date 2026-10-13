@@ -2,7 +2,14 @@
 //!
 //! This crate is an implementation detail and is not meant to be used
 //! directly: depend on `embedded-i18n`, which re-exports and documents the
-//! macros.
+//! macros, and provides the runtime items their expansions refer to. Its API
+//! and versioning follow `embedded-i18n`.
+//!
+//! The macros read the locale files of the calling crate at compile time,
+//! configured by the `EMBEDDED_I18N_*` environment variables, and expand to
+//! string literals or to selections between them. The locale file formats are
+//! enabled by the `backend-*` features, which `embedded-i18n` forwards.
+#![cfg_attr(doc, deny(missing_docs))]
 
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -980,6 +987,10 @@ fn expand_track_locales(input: TokenStream2, catalogs: &Catalogs) -> syn::Result
     })
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Makes the calling crate depend on the locale files it reads.\n\nSee [`embedded_i18n::track_locales!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.track_locales.html)."
+)]
 #[proc_macro]
 pub fn track_locales(input: TokenStream) -> TokenStream {
     expand_track_locales(input.into(), &CATALOGS)
@@ -987,6 +998,10 @@ pub fn track_locales(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Replaces a message key with its translation, at compile time.\n\nSee [`embedded_i18n::translate!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate.html)."
+)]
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {
     localized(input.into(), &CATALOGS, expand, combine_array)
@@ -994,6 +1009,10 @@ pub fn translate(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Selects the plural form of a message matching a count.\n\nSee [`embedded_i18n::translate_plural!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate_plural.html)."
+)]
 #[proc_macro]
 pub fn translate_plural(input: TokenStream) -> TokenStream {
     localized(input.into(), &CATALOGS, expand_plural, combine_match)
@@ -1001,6 +1020,10 @@ pub fn translate_plural(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Writes the plural form of a message matching a count.\n\nSee [`embedded_i18n::translate_plural_write!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate_plural_write.html)."
+)]
 #[proc_macro]
 pub fn translate_plural_write(input: TokenStream) -> TokenStream {
     localized(input.into(), &CATALOGS, expand_plural_write, combine_match)
@@ -1008,6 +1031,10 @@ pub fn translate_plural_write(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Selects a variant of a message from a value.\n\nSee [`embedded_i18n::translate_select!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate_select.html)."
+)]
 #[proc_macro]
 pub fn translate_select(input: TokenStream) -> TokenStream {
     localized(input.into(), &CATALOGS, expand_select, combine_match)
@@ -1015,6 +1042,10 @@ pub fn translate_select(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Writes the variant of a message selected from a value.\n\nSee [`embedded_i18n::translate_select_write!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate_select_write.html)."
+)]
 #[proc_macro]
 pub fn translate_select_write(input: TokenStream) -> TokenStream {
     localized(input.into(), &CATALOGS, expand_select_write, combine_match)
@@ -1022,6 +1053,10 @@ pub fn translate_select_write(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Builds format arguments from a translated format string.\n\nSee [`embedded_i18n::translate_args!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate_args.html)."
+)]
 #[proc_macro]
 pub fn translate_args(input: TokenStream) -> TokenStream {
     expand_args_localized(input.into(), &CATALOGS)
@@ -1029,6 +1064,10 @@ pub fn translate_args(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[cfg_attr(
+    doc,
+    doc = "Writes a translated, formatted message.\n\nSee [`embedded_i18n::translate_write!`](https://docs.rs/embedded-i18n/latest/embedded_i18n/macro.translate_write.html)."
+)]
 #[proc_macro]
 pub fn translate_write(input: TokenStream) -> TokenStream {
     localized(input.into(), &CATALOGS, expand_write, combine_match)
