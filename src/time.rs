@@ -1,5 +1,7 @@
 use core::fmt::{self, Write};
 
+use crate::date_time::{DATE_TIME_LOCALE, DateTimeLocale};
+
 #[cfg(feature = "alloc")]
 use alloc::string::String;
 
@@ -75,47 +77,202 @@ fn days_in_month(year: i64, month: usize) -> i64 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DateTimeFormatter {
+    locale: DateTimeLocale,
+    offset: i32,
+}
+
+impl Default for DateTimeFormatter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DateTimeFormatter {
+    pub const fn new() -> Self {
+        DateTimeFormatter {
+            locale: DATE_TIME_LOCALE,
+            offset: 0,
+        }
+    }
+
+    pub const fn with_locale(self, locale: DateTimeLocale) -> Self {
+        DateTimeFormatter { locale, ..self }
+    }
+
+    pub const fn with_utc_offset(self, seconds: i32) -> Self {
+        DateTimeFormatter {
+            offset: seconds,
+            ..self
+        }
+    }
+
+    pub const fn locale(&self) -> &DateTimeLocale {
+        &self.locale
+    }
+
+    pub const fn utc_offset(&self) -> i32 {
+        self.offset
+    }
+
+    pub fn write<W: Write>(
+        &self,
+        writer: &mut W,
+        unix_timestamp: i64,
+        pattern: &str,
+    ) -> fmt::Result {
+        let local = unix_timestamp.saturating_add(i64::from(self.offset));
+        let (year, month, day, hour, minute, second) = decompose_unix_timestamp(local);
+        let fields = Fields {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            weekday: weekday(local),
+        };
+        self.write_pattern(writer, &fields, pattern, true)
+    }
+
+    pub const fn display<'a>(
+        &'a self,
+        unix_timestamp: i64,
+        pattern: &'a str,
+    ) -> DateTimeDisplay<'a> {
+        DateTimeDisplay {
+            formatter: self,
+            unix_timestamp,
+            pattern,
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub fn format(&self, unix_timestamp: i64, pattern: &str) -> String {
+        let mut output = String::with_capacity(pattern.len() + 16);
+        let _ = self.write(&mut output, unix_timestamp, pattern);
+        output
+    }
+
+    fn write_pattern<W: Write>(
+        &self,
+        writer: &mut W,
+        fields: &Fields,
+        pattern: &str,
+        expand: bool,
+    ) -> fmt::Result {
+        let locale = &self.locale;
+        let mut characters = pattern.chars();
+
+        while let Some(character) = characters.next() {
+            if character != '%' {
+                writer.write_char(character)?;
+                continue;
+            }
+
+            match characters.next() {
+                Some('Y') => write!(writer, "{:04}", fields.year)?,
+                Some('y') => write!(writer, "{:02}", fields.year % 100)?,
+                Some('m') => write!(writer, "{:02}", fields.month)?,
+                Some('d') => write!(writer, "{:02}", fields.day)?,
+                Some('e') => write!(writer, "{:2}", fields.day)?,
+                Some('H') => write!(writer, "{:02}", fields.hour)?,
+                Some('I') => write!(writer, "{:02}", hour_12(fields.hour))?,
+                Some('M') => write!(writer, "{:02}", fields.minute)?,
+                Some('S') => write!(writer, "{:02}", fields.second)?,
+                Some('p') => writer.write_str(if fields.hour < 12 {
+                    locale.am
+                } else {
+                    locale.pm
+                })?,
+                Some('B') => writer.write_str(locale.months[usize::from(fields.month - 1)])?,
+                Some('b' | 'h') => {
+                    writer.write_str(locale.months_abbreviated[usize::from(fields.month - 1)])?
+                }
+                Some('A') => writer.write_str(locale.weekdays[usize::from(fields.weekday)])?,
+                Some('a') => {
+                    writer.write_str(locale.weekdays_abbreviated[usize::from(fields.weekday)])?
+                }
+                Some('u') => write!(
+                    writer,
+                    "{}",
+                    if fields.weekday == 0 {
+                        7
+                    } else {
+                        fields.weekday
+                    }
+                )?,
+                Some('w') => write!(writer, "{}", fields.weekday)?,
+                Some('z') => {
+                    let sign = if self.offset < 0 { '-' } else { '+' };
+                    let minutes = self.offset.unsigned_abs() / 60;
+                    write!(writer, "{}{:02}{:02}", sign, minutes / 60, minutes % 60)?
+                }
+                Some('O') => match characters.clone().next() {
+                    Some('B') => {
+                        characters.next();
+                        writer.write_str(locale.months_standalone[usize::from(fields.month - 1)])?
+                    }
+                    _ => writer.write_str("%O")?,
+                },
+                Some('x') if expand => self.write_pattern(writer, fields, locale.date, false)?,
+                Some('X') if expand => self.write_pattern(writer, fields, locale.time, false)?,
+                Some('c') if expand => {
+                    self.write_pattern(writer, fields, locale.date, false)?;
+                    writer.write_char(' ')?;
+                    self.write_pattern(writer, fields, locale.time, false)?
+                }
+                Some('%') => writer.write_char('%')?,
+                Some(other) => {
+                    writer.write_char('%')?;
+                    writer.write_char(other)?;
+                }
+                None => writer.write_char('%')?,
+            }
+        }
+
+        Ok(())
+    }
+}
+
+struct Fields {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    weekday: u8,
+}
+
+fn weekday(unix_timestamp: i64) -> u8 {
+    (unix_timestamp.div_euclid(86_400) + 4).rem_euclid(7) as u8
+}
+
+pub struct DateTimeDisplay<'a> {
+    formatter: &'a DateTimeFormatter,
+    unix_timestamp: i64,
+    pattern: &'a str,
+}
+
+impl fmt::Display for DateTimeDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.formatter.write(f, self.unix_timestamp, self.pattern)
+    }
+}
+
 pub fn write_unix_timestamp<W: Write>(
     writer: &mut W,
     unix_timestamp: i64,
     pattern: &str,
 ) -> fmt::Result {
-    let (year, month, day, hour, minute, second) = decompose_unix_timestamp(unix_timestamp);
-
-    let mut characters = pattern.chars();
-
-    while let Some(character) = characters.next() {
-        if character != '%' {
-            writer.write_char(character)?;
-            continue;
-        }
-
-        match characters.next() {
-            Some('Y') => write!(writer, "{:04}", year)?,
-            Some('m') => write!(writer, "{:02}", month)?,
-            Some('d') => write!(writer, "{:02}", day)?,
-            Some('H') => write!(writer, "{:02}", hour)?,
-            Some('I') => write!(writer, "{:02}", hour_12(hour))?,
-            Some('M') => write!(writer, "{:02}", minute)?,
-            Some('S') => write!(writer, "{:02}", second)?,
-            Some('p') => writer.write_str(if hour < 12 { "AM" } else { "PM" })?,
-            Some('%') => writer.write_char('%')?,
-            Some(other) => {
-                writer.write_char('%')?;
-                writer.write_char(other)?;
-            }
-            None => writer.write_char('%')?,
-        }
-    }
-
-    Ok(())
+    DateTimeFormatter::new().write(writer, unix_timestamp, pattern)
 }
 
 #[cfg(feature = "alloc")]
 pub fn format_unix_timestamp(unix_timestamp: i64, pattern: &str) -> String {
-    let mut output = String::with_capacity(pattern.len() + 16);
-    let _ = write_unix_timestamp(&mut output, unix_timestamp, pattern);
-    output
+    DateTimeFormatter::new().format(unix_timestamp, pattern)
 }
 
 const fn hour_12(hour_24: u8) -> u8 {
@@ -214,7 +371,7 @@ mod tests {
 
     #[test]
     fn unknown_format_token() {
-        assert_eq!(format_unix_timestamp(0, "%x"), "%x");
+        assert_eq!(format_unix_timestamp(0, "%q"), "%q");
     }
 
     #[test]
@@ -372,5 +529,154 @@ mod writer_tests {
         let mut buffer = Buffer::new();
         let pattern = "%Y-%m-%d %H:%M:%S %Y-%m-%d %H:%M:%S %Y-%m-%d %H:%M:%S %Y-%m-%d";
         assert!(write_unix_timestamp(&mut buffer, 0, pattern).is_err());
+    }
+}
+
+#[cfg(test)]
+mod localized_tests {
+    use super::*;
+    use crate::date_time::date_time_locale;
+
+    struct Buffer {
+        bytes: [u8; 128],
+        length: usize,
+    }
+
+    impl Write for Buffer {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            let end = self.length + value.len();
+            if end > self.bytes.len() {
+                return Err(fmt::Error);
+            }
+            self.bytes[self.length..end].copy_from_slice(value.as_bytes());
+            self.length = end;
+            Ok(())
+        }
+    }
+
+    fn render(formatter: &DateTimeFormatter, unix_timestamp: i64, pattern: &str) -> Buffer {
+        let mut buffer = Buffer {
+            bytes: [0; 128],
+            length: 0,
+        };
+        formatter
+            .write(&mut buffer, unix_timestamp, pattern)
+            .unwrap();
+        buffer
+    }
+
+    fn assert_renders(
+        formatter: &DateTimeFormatter,
+        unix_timestamp: i64,
+        pattern: &str,
+        expected: &str,
+    ) {
+        let buffer = render(formatter, unix_timestamp, pattern);
+        assert_eq!(
+            core::str::from_utf8(&buffer.bytes[..buffer.length]).unwrap(),
+            expected
+        );
+    }
+
+    const OCTOBER_13_2026: i64 = 1_791_884_800;
+
+    #[test]
+    fn english_names_and_patterns() {
+        let formatter = DateTimeFormatter::new();
+        assert_renders(
+            &formatter,
+            0,
+            "%A %a %B %b %h",
+            "Thursday Thu January Jan Jan",
+        );
+        assert_renders(&formatter, OCTOBER_13_2026, "%c", "10/13/2026 09:46:40 AM");
+        assert_renders(&formatter, OCTOBER_13_2026, "%y %e %u %w", "26 13 2 2");
+    }
+
+    #[test]
+    fn french_names_and_patterns() {
+        let formatter = DateTimeFormatter::new().with_locale(date_time_locale("fr"));
+        assert_renders(
+            &formatter,
+            OCTOBER_13_2026,
+            "%A %d %B %Y, %X",
+            "mardi 13 octobre 2026, 09:46:40",
+        );
+        assert_renders(&formatter, OCTOBER_13_2026, "%x", "13/10/2026");
+        assert_renders(&formatter, OCTOBER_13_2026, "%a %b", "mar. oct.");
+    }
+
+    #[test]
+    fn standalone_months() {
+        let formatter = DateTimeFormatter::new().with_locale(date_time_locale("ru"));
+        assert_renders(
+            &formatter,
+            OCTOBER_13_2026,
+            "%d %B / %OB %Y",
+            "13 октября / октябрь 2026",
+        );
+        assert_renders(&formatter, OCTOBER_13_2026, "%Oq", "%Oq");
+    }
+
+    #[test]
+    fn localized_am_pm() {
+        let formatter = DateTimeFormatter::new().with_locale(date_time_locale("ko"));
+        assert_renders(&formatter, OCTOBER_13_2026, "%X", "오전 09:46:40");
+        assert_renders(&formatter, OCTOBER_13_2026 + 6 * 3600, "%p", "오후");
+    }
+
+    #[test]
+    fn utc_offset_shifts_time_and_prints_z() {
+        let paris = DateTimeFormatter::new().with_utc_offset(2 * 3600);
+        assert_renders(&paris, OCTOBER_13_2026, "%H:%M %z", "11:46 +0200");
+        let newfoundland = DateTimeFormatter::new().with_utc_offset(-(3 * 3600 + 1800));
+        assert_renders(
+            &newfoundland,
+            OCTOBER_13_2026,
+            "%d %H:%M %z",
+            "13 06:16 -0330",
+        );
+        let before_midnight = DateTimeFormatter::new().with_utc_offset(-10 * 3600);
+        assert_renders(&before_midnight, OCTOBER_13_2026, "%A %d", "Monday 12");
+        assert_renders(&DateTimeFormatter::new(), 0, "%z", "+0000");
+    }
+
+    #[test]
+    fn weekday_before_epoch() {
+        assert_renders(&DateTimeFormatter::new(), -1, "%A", "Wednesday");
+        assert_renders(&DateTimeFormatter::new(), -86_400 * 4, "%A", "Sunday");
+    }
+
+    #[test]
+    fn patterns_do_not_expand_recursively() {
+        let formatter = DateTimeFormatter::new().with_locale(DateTimeLocale {
+            date: "%x",
+            ..date_time_locale("en")
+        });
+        assert_renders(&formatter, 0, "%x", "%x");
+    }
+
+    #[test]
+    fn display_adapter() {
+        let formatter = DateTimeFormatter::new();
+        let mut buffer = Buffer {
+            bytes: [0; 128],
+            length: 0,
+        };
+        write!(buffer, "[{}]", formatter.display(0, "%Y-%m-%d")).unwrap();
+        assert_eq!(&buffer.bytes[..buffer.length], b"[1970-01-01]");
+    }
+
+    #[test]
+    fn reports_writer_errors() {
+        let mut buffer = Buffer {
+            bytes: [0; 128],
+            length: 120,
+        };
+        assert!(
+            DateTimeFormatter::new()
+                .write(&mut buffer, 0, "%A %B")
+                .is_err()
+        );
     }
 }
