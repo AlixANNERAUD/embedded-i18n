@@ -1,5 +1,7 @@
 use embedded_i18n::translate;
 
+embedded_i18n::track_locales!();
+
 #[test]
 fn basic_translation() {
     assert_eq!(translate!("greeting"), "Hello");

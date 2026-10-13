@@ -11,7 +11,7 @@ mod time;
 pub use range::*;
 pub use time::*;
 
-pub use embedded_i18n_macros::translate;
+pub use embedded_i18n_macros::{track_locales, translate};
 
 const DEFAULT_LOCALE: &str = "en";
 const DEFAULT_FALLBACK_LOCALE: &str = "en";
