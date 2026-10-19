@@ -316,6 +316,9 @@ pub fn get_fallback_locale_build() -> std::string::String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "std")]
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn default_locale_is_en() {
         assert_eq!(get_locale(), "en");
@@ -349,6 +352,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn get_locale_build_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let locale = get_locale_build();
         assert_eq!(locale, "en");
     }
@@ -356,6 +360,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn get_fallback_locale_build_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let fallback = get_fallback_locale_build();
         assert_eq!(fallback, "en");
     }
@@ -363,6 +368,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn get_locale_build_with_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let previous = std::env::var("EMBEDDED_I18N_LOCALE");
         unsafe { std::env::set_var("EMBEDDED_I18N_LOCALE", "fr") };
         assert_eq!(get_locale_build(), "fr");
@@ -375,6 +381,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn get_fallback_locale_build_with_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let previous = std::env::var("EMBEDDED_I18N_FALLBACK");
         unsafe { std::env::set_var("EMBEDDED_I18N_FALLBACK", "de") };
         assert_eq!(get_fallback_locale_build(), "de");
