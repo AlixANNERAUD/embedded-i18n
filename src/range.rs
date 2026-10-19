@@ -46,7 +46,7 @@ pub const VIETNAMESE_EXTENSIONS: Range<u32> = 0x1EA0..0x1F00;
 /// Returns the Unicode ranges needed to render a language, to subset fonts.
 ///
 /// Returns `None` for unsupported locales. Supported: `en`, `fr`, `de`, `es`,
-/// `it`, `pt`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`,
+/// `it`, `pt`, `pt-BR`, `nl`, `sv`, `no`, `da`, `pl`, `cs`, `sk`, `hu`, `ro`, `tr`, `ru`,
 /// `uk`, `be`, `el`, `ar`, `he`, `ja`, `zh`, `zh-CN`, `zh-TW`, `ko`, `hi`, `th`
 /// and `vi`.
 ///
@@ -73,7 +73,7 @@ pub fn get_locale_ranges(locale: &str) -> Option<&'static [Range<u32>]> {
 
         "it" => &[BASIC_LATIN, LATIN_1_SUPPLEMENT],
 
-        "pt" => &[BASIC_LATIN, LATIN_1_SUPPLEMENT, LATIN_EXTENDED_A],
+        "pt" | "pt-BR" => &[BASIC_LATIN, LATIN_1_SUPPLEMENT, LATIN_EXTENDED_A],
 
         "nl" => &[BASIC_LATIN, LATIN_1_SUPPLEMENT],
 
@@ -234,6 +234,15 @@ mod tests {
         assert_eq!(ranges.len(), 4);
         assert!(ranges.contains(&BASIC_LATIN));
         assert!(ranges.contains(&LATIN_1_SUPPLEMENT));
+    }
+
+    #[test]
+    fn test_get_locale_ranges_brazilian_portuguese() {
+        assert_eq!(get_locale_ranges("pt-BR"), get_locale_ranges("pt"));
+        let ranges = get_locale_ranges("pt-BR").unwrap();
+        assert!(ranges.contains(&BASIC_LATIN));
+        assert!(ranges.contains(&LATIN_1_SUPPLEMENT));
+        assert!(ranges.contains(&LATIN_EXTENDED_A));
     }
 
     #[test]
