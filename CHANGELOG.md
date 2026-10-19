@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3](https://github.com/AlixANNERAUD/embedded-i18n/compare/v0.1.2...v0.1.3) - 2026-10-19
+
+### Fixed
+
+- support pt-BR in Unicode font range lookup ([#56](https://github.com/AlixANNERAUD/embedded-i18n/pull/56))
+
+### Other
+
+- Serialize environment-dependent tests with a shared lock
+
 ## [0.1.2](https://github.com/AlixANNERAUD/embedded-i18n/compare/v0.1.1...v0.1.2) - 2026-10-13
 
 ### Documentation
