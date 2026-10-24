@@ -18,9 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v5
 
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-key-suffix: check
+          github-cache-mode: objects
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -57,7 +60,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v5
+
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-key-suffix: package
 
       - name: Version consistency
         run: |
@@ -80,25 +87,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v5
+
+      - uses: jdx/mr-boxington-action@v1
         with:
-          targets: thumbv7em-none-eabihf
+          cache-key-suffix: no-std-${{ strategy.job-index }}
 
       - name: Build
         run: cargo build --target thumbv7em-none-eabihf --no-default-features --features ${{ matrix.features }}
 
   msrv:
     runs-on: ubuntu-latest
+    env:
+      MISE_ENV: msrv
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read MSRV
-        id: msrv
-        run: echo "version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "embedded-i18n") | .rust_version')" >> "$GITHUB_OUTPUT"
+      - uses: jdx/mise-action@v5
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: jdx/mr-boxington-action@v1
         with:
-          toolchain: ${{ steps.msrv.outputs.version }}
+          cache-key-suffix: msrv
 
       - name: Test
         run: cargo test --workspace --all-features --locked
