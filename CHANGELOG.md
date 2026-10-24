@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4](https://github.com/AlixANNERAUD/embedded-i18n/compare/v0.1.3...v0.1.4) - 2026-10-24
+
+### Miscellaneous
+
+- set up mise and Mr Boxington ([#58](https://github.com/AlixANNERAUD/embedded-i18n/pull/58))
+
 ## [0.1.3](https://github.com/AlixANNERAUD/embedded-i18n/compare/v0.1.2...v0.1.3) - 2026-10-19
 
 ### Fixed
