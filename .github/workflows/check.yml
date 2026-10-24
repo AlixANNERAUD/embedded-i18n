@@ -16,7 +16,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
 
@@ -48,7 +48,7 @@ jobs:
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
       - name: Upload Coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: AlixANNERAUD/embedded-i18n
@@ -58,7 +58,7 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
 
@@ -85,7 +85,7 @@ jobs:
       matrix:
         features: [backend-json, backend-po, "backend-json,alloc"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
 
@@ -101,7 +101,7 @@ jobs:
     env:
       MISE_ENV: msrv
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
 
